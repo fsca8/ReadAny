@@ -1,4 +1,4 @@
-import type { Highlight, HighlightColor } from "../types";
+import type { Highlight, HighlightAnchor, HighlightColor } from "../types";
 import { generateId } from "../utils/generate-id";
 
 interface ExistingHighlightRef {
@@ -7,7 +7,12 @@ interface ExistingHighlightRef {
 
 export interface SelectionNoteMutationInput {
   bookId: string;
-  cfi: string;
+  /** Legacy CFI; only meaningful when `anchor.kind === "cfi"`. */
+  cfi?: string;
+  /** Anchor for a NEW highlight. Required when creating; ignored when
+   * `existingHighlight` is set (an update only touches note/updatedAt).
+   * (EPUB/MOBI/text-PDF -> cfi; scanned PDF/CBZ -> page.) */
+  anchor?: HighlightAnchor;
   text: string;
   note: string;
   chapterTitle?: string;
@@ -44,12 +49,18 @@ export function createSelectionNoteMutation(
     };
   }
 
+  // A create needs an anchor; fall back to a legacy CFI anchor when a caller
+  // still passes only `cfi`, and to a page anchor when neither is present.
+  const anchor: HighlightAnchor =
+    input.anchor ?? (input.cfi ? { kind: "cfi", cfi: input.cfi } : { kind: "page", page: 1 });
+
   return {
     kind: "create",
     highlight: {
       id: generateId(),
       bookId: input.bookId,
-      cfi: input.cfi,
+      cfi: anchor.kind === "cfi" ? anchor.cfi : input.cfi,
+      anchor,
       text: input.text,
       color: input.defaultColor ?? "yellow",
       note: normalizedNote,

@@ -8,19 +8,19 @@ import type { BookDoc, BookFormat } from "@/lib/reader/document-loader";
 import { getDirection, isFixedLayoutBook } from "@/lib/reader/document-loader";
 import { getFontTheme } from "@/lib/reader/font-themes";
 import { registerIframeEventHandlers } from "@/lib/reader/iframe-event-handlers";
+import {
+  type JustifyCapabilities,
+  buildJustifyCss,
+  detectJustifyCapabilities,
+  pinAlignedBrContainers,
+  unpinAlignedBrContainers,
+} from "@readany/core/reader/justified-text";
 import type {
   ChapterParagraph,
   ChapterTranslationResult,
 } from "@readany/core/translation/chapter-translator";
 import { cleanText, isTTSFootnoteMarker, shouldSkipTTSNode } from "@readany/core/tts";
 import type { ViewSettings } from "@readany/core/types";
-import {
-  buildJustifyCss,
-  detectJustifyCapabilities,
-  pinAlignedBrContainers,
-  unpinAlignedBrContainers,
-  type JustifyCapabilities,
-} from "@readany/core/reader/justified-text";
 import { Overlayer } from "foliate-js/overlayer.js";
 import { marked } from "marked";
 /**
@@ -740,6 +740,10 @@ export interface TOCItem {
 export interface BookSelection {
   text: string;
   cfi?: string;
+  /** 1-based physical page number, populated for fixed-layout formats (PDF/CBZ)
+   * where CFI may not be available (e.g. scanned PDF without a text layer).
+   * Used as a fallback anchor for page-level annotations. */
+  page?: number;
   chapterIndex?: number;
   rects: DOMRect[];
   range?: Range; // Original range for re-selection
@@ -2785,6 +2789,25 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
         } catch {
           // CFI generation may fail for some selections
         }
+        // 1-based page number for fixed-layout formats (PDF/CBZ). Always
+        // populated so we can fall back to a page-anchor annotation when CFI
+        // generation fails or returns empty (e.g. scanned PDF text layer is
+        // empty). For reflowable formats this will be left undefined — those
+        // formats always have a usable CFI via the text-layer.
+        const page =
+          typeof selectedContent.index === "number" && view.isFixedLayout
+            ? selectedContent.index + 1
+            : undefined;
+
+        console.log("[selection] anchor inputs", {
+          cfi,
+          cfiLen: cfi?.length ?? 0,
+          page,
+          isFixedLayout: view.isFixedLayout,
+          sectionIndex: selectedContent.index,
+          textLen: text.length,
+          textHead: text.slice(0, 40),
+        });
 
         const rects = Array.from(range.getClientRects());
 
@@ -2830,7 +2853,7 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
           });
         }
 
-        return { text, cfi, chapterIndex, rects: offsetRects, range };
+        return { text, cfi, page, chapterIndex, rects: offsetRects, range };
       },
       [],
     );

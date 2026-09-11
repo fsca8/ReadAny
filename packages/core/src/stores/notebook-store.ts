@@ -2,13 +2,16 @@ import { create } from "zustand";
 /**
  * Notebook store — manages notebook panel state for note editing
  */
-import type { Highlight } from "../types";
+import type { Highlight, HighlightAnchor } from "../types";
 
 export interface PendingNote {
   /** Selected text to annotate */
   text: string;
-  /** CFI location */
-  cfi: string;
+  /** CFI location (only present when `anchor.kind === "cfi"`). */
+  cfi?: string;
+  /** Anchor for the pending highlight. CFI for text-layer formats; page for
+   * scanned PDF / CBZ. */
+  anchor: HighlightAnchor;
   /** Chapter title for context */
   chapterTitle?: string;
   /** Associated highlight ID (if editing existing) */

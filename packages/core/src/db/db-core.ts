@@ -380,7 +380,16 @@ export async function initDatabase(): Promise<void> {
     CREATE TABLE IF NOT EXISTS highlights (
       id TEXT PRIMARY KEY,
       book_id TEXT NOT NULL,
-      cfi TEXT NOT NULL,
+      /* Legacy CFI range; nullable so page-level annotations (scanned PDF, CBZ)
+         can store a record without a CFI. New code should read anchor_kind
+         and anchor_page instead. */
+      cfi TEXT,
+      /* Anchor discriminator:
+           "cfi"  : anchor is cfi (text-layer formats: EPUB/MOBI/FB2/text-PDF)
+           "page" : anchor is anchor_page (no-text-layer formats) */
+      anchor_kind TEXT NOT NULL DEFAULT 'cfi',
+      /* 1-based page number when anchor_kind = 'page'; NULL otherwise. */
+      anchor_page INTEGER,
       text TEXT NOT NULL,
       color TEXT NOT NULL DEFAULT 'yellow',
       note TEXT,

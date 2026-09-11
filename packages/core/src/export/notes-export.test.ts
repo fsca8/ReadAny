@@ -39,6 +39,7 @@ const highlight: Highlight = {
   id: "highlight-1",
   bookId: "book-1",
   cfi: "epubcfi(/6/2)",
+  anchor: { kind: "cfi", cfi: "epubcfi(/6/2)" },
   text: "A precise sentence worth keeping.",
   color: "yellow",
   note: "Remember this.",

@@ -92,11 +92,17 @@ class ReadingContextService {
 
     if (!this.context || this.context.bookId !== partial.bookId) {
       const highlights = await getHighlights(partial.bookId);
-      const recentHighlights = highlights.slice(0, 5).map((h) => ({
-        text: h.text,
-        cfi: h.cfi,
-        note: h.note,
-      }));
+      const recentHighlights = highlights
+        .slice(0, 5)
+        // ReadingContext is CFI-anchored (the AI uses cfi to jump back to the
+        // highlight). Page-anchored records (scanned PDF, CBZ) don't have a
+        // stable CFI, so they don't belong in this context snapshot.
+        .filter((h) => h.anchor?.kind === "cfi" || (h.anchor == null && h.cfi))
+        .map((h) => ({
+          text: h.text,
+          cfi: h.anchor?.kind === "cfi" ? h.anchor.cfi : (h.cfi ?? ""),
+          note: h.note,
+        }));
 
       this.context = {
         bookId: partial.bookId,

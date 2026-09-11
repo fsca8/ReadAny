@@ -32,7 +32,8 @@ interface NotebookPanelProps {
   onClose: () => void;
   onGoToCfi?: (cfi: string) => void;
   onAddAnnotation?: (cfi: string, color: string, note?: string) => void;
-  onDeleteAnnotation?: (cfi: string) => void;
+  /** Highlight id to remove; parent maps to foliate addAnnotation by id. */
+  onDeleteAnnotation?: (highlightId: string) => void;
 }
 
 export function NotebookPanel({
@@ -85,9 +86,11 @@ export function NotebookPanel({
 
   const handleSave = () => {
     if (pendingNote) {
+      const cfi = pendingNote.anchor?.kind === "cfi" ? pendingNote.anchor.cfi : pendingNote.cfi;
       const mutation = createSelectionNoteMutation({
         bookId,
-        cfi: pendingNote.cfi,
+        cfi,
+        anchor: pendingNote.anchor,
         text: pendingNote.text,
         note: noteContent,
         chapterTitle: pendingNote.chapterTitle,
@@ -95,15 +98,21 @@ export function NotebookPanel({
       });
       if (mutation.kind === "create") {
         addHighlight(mutation.highlight);
-        onAddAnnotation?.(pendingNote.cfi, mutation.highlight.color, mutation.highlight.note);
+        // CFI anchor: foliate-js draws an overlay. Page anchor: the page
+        // event already fired when the highlight was first created; we don't
+        // re-emit it here.
+        if (cfi) onAddAnnotation?.(cfi, mutation.highlight.color, mutation.highlight.note);
       }
       // Clear draft
       clearDraft(pendingNote.text);
       clearPending();
     } else if (editingHighlight) {
+      const editingAnchor = editingHighlight.anchor;
+      const cfi = editingAnchor?.kind === "cfi" ? editingAnchor.cfi : editingHighlight.cfi;
       const mutation = createSelectionNoteMutation({
         bookId,
-        cfi: editingHighlight.cfi,
+        cfi,
+        anchor: editingAnchor,
         text: editingHighlight.text,
         note: noteContent,
         chapterTitle: editingHighlight.chapterTitle,
@@ -111,11 +120,9 @@ export function NotebookPanel({
       });
       if (mutation.kind === "update") {
         updateHighlight(mutation.id, mutation.updates);
-        onAddAnnotation?.(
-          editingHighlight.cfi,
-          editingHighlight.color,
-          mutation.updates.note,
-        );
+        if (cfi) {
+          onAddAnnotation?.(cfi, editingHighlight.color, mutation.updates.note);
+        }
       }
       clearPending();
     }
@@ -130,7 +137,11 @@ export function NotebookPanel({
   const handleDeleteNote = () => {
     if (editingHighlight) {
       updateHighlight(editingHighlight.id, { note: undefined });
-      onAddAnnotation?.(editingHighlight.cfi, editingHighlight.color, undefined);
+      const editingCfi =
+        editingHighlight.anchor?.kind === "cfi"
+          ? editingHighlight.anchor.cfi
+          : editingHighlight.cfi;
+      if (editingCfi) onAddAnnotation?.(editingCfi, editingHighlight.color, undefined);
       clearPending();
       setNoteContent("");
     }
@@ -138,8 +149,9 @@ export function NotebookPanel({
 
   const handleHighlightClick = (highlight: Highlight) => {
     // Navigate to the highlight location
-    if (onGoToCfi && highlight.cfi) {
-      onGoToCfi(highlight.cfi);
+    const cfi = highlight.anchor?.kind === "cfi" ? highlight.anchor.cfi : highlight.cfi;
+    if (onGoToCfi && cfi) {
+      onGoToCfi(cfi);
     }
   };
 
@@ -149,7 +161,8 @@ export function NotebookPanel({
 
   const handleDeleteNoteOnly = (highlight: Highlight) => {
     updateHighlight(highlight.id, { note: undefined });
-    onAddAnnotation?.(highlight.cfi, highlight.color, undefined);
+    const cfi = highlight.anchor?.kind === "cfi" ? highlight.anchor.cfi : highlight.cfi;
+    if (cfi) onAddAnnotation?.(cfi, highlight.color, undefined);
     // Clear editing state if we're editing this highlight
     if (editingHighlight?.id === highlight.id) {
       clearPending();
@@ -160,10 +173,11 @@ export function NotebookPanel({
   const handleDeleteHighlight = (highlight: Highlight) => {
     // Remove from store
     removeHighlight(highlight.id);
-    // Remove from view
-    if (highlight.cfi) {
-      onDeleteAnnotation?.(highlight.cfi);
-    }
+    // Remove from view. CFI anchors were registered with `value = cfi`;
+    // page anchors were registered with `value = "page-${id}"`. The parent
+    // (ReaderView) syncs both cases from the store via a useEffect that
+    // diffs against the foliate addAnnotation calls, so just notify it.
+    onDeleteAnnotation?.(highlight.id);
     // Clear editing state if we're editing this highlight
     if (editingHighlight?.id === highlight.id) {
       clearPending();
@@ -195,6 +209,15 @@ export function NotebookPanel({
   // Check if we're in editing mode
   const isEditing = pendingNote || editingHighlight;
   const editingText = pendingNote?.text || editingHighlight?.text || "";
+
+  console.log("[NotebookPanel] render", {
+    hasPendingNote: !!pendingNote,
+    hasEditingHighlight: !!editingHighlight,
+    isEditing: !!isEditing,
+    pendingAnchor: pendingNote?.anchor,
+    editingAnchor: editingHighlight?.anchor,
+    editingTextLen: editingText.length,
+  });
 
   return (
     <div className="flex h-full flex-col">

@@ -2936,17 +2936,27 @@ html, body {
       const iframeRect = iframe ? iframe.getBoundingClientRect() : { left: 0, top: 0 };
 
       let cfi = '';
+      let pageIndex = null;
       try {
         if (view && view.getCFI) {
           const contents = view.renderer && view.renderer.getContents ? view.renderer.getContents() : [];
           const found = contents.find(c => c.doc === doc);
-          if (found) cfi = view.getCFI(found.index, range) || '';
+          if (found) {
+            cfi = view.getCFI(found.index, range) || '';
+            // 1-based physical page for fixed-layout formats (PDF/CBZ). Used as
+            // a page-anchor fallback when the text layer yields no usable CFI
+            // (e.g. a scanned PDF).
+            if (view.isFixedLayout && typeof found.index === 'number') {
+              pageIndex = found.index + 1;
+            }
+          }
         }
       } catch { /* ignore */ }
 
       postToRN('selection', {
         text,
         cfi,
+        page: pageIndex,
         position: {
           x: iframeRect.left + rect.left + rect.width / 2,
           y: iframeRect.top + firstRect.top - 4,

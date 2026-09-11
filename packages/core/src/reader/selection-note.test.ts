@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { createSelectionNoteMutation } from "./selection-note";
 
+const sampleCfi = "epubcfi(/6/2[chapter]!/4/2/10)";
+const cfiAnchor = { kind: "cfi" as const, cfi: sampleCfi };
+
 describe("createSelectionNoteMutation", () => {
   it("creates a new highlight mutation for a fresh note", () => {
     const mutation = createSelectionNoteMutation({
       bookId: "book-1",
-      cfi: "epubcfi(/6/2[chapter]!/4/2/10)",
+      anchor: cfiAnchor,
       text: "Selected text",
       note: "A new note",
       chapterTitle: "Chapter 1",
@@ -20,7 +23,8 @@ describe("createSelectionNoteMutation", () => {
 
     expect(mutation.highlight).toMatchObject({
       bookId: "book-1",
-      cfi: "epubcfi(/6/2[chapter]!/4/2/10)",
+      cfi: sampleCfi,
+      anchor: cfiAnchor,
       text: "Selected text",
       note: "A new note",
       chapterTitle: "Chapter 1",
@@ -34,7 +38,7 @@ describe("createSelectionNoteMutation", () => {
   it("normalizes blank notes to undefined when creating", () => {
     const mutation = createSelectionNoteMutation({
       bookId: "book-1",
-      cfi: "epubcfi(/6/2[chapter]!/4/2/10)",
+      anchor: cfiAnchor,
       text: "Selected text",
       note: "   ",
       now: 42,
@@ -49,10 +53,28 @@ describe("createSelectionNoteMutation", () => {
     expect(mutation.highlight.color).toBe("yellow");
   });
 
+  it("creates a page-anchored highlight for non-text-layer formats", () => {
+    const mutation = createSelectionNoteMutation({
+      bookId: "book-1",
+      anchor: { kind: "page", page: 12 },
+      text: "Selected text",
+      note: "Scanned PDF note",
+      now: 1_700_000_000_000,
+    });
+
+    expect(mutation.kind).toBe("create");
+    if (mutation.kind !== "create") {
+      throw new Error("Expected create mutation");
+    }
+
+    expect(mutation.highlight.anchor).toEqual({ kind: "page", page: 12 });
+    expect(mutation.highlight.cfi).toBeUndefined();
+  });
+
   it("updates an existing highlight instead of creating a new one", () => {
     const mutation = createSelectionNoteMutation({
       bookId: "book-1",
-      cfi: "epubcfi(/6/2[chapter]!/4/2/10)",
+      anchor: cfiAnchor,
       text: "Selected text",
       note: "  Updated note  ",
       existingHighlight: { id: "hl-123" },
@@ -72,7 +94,7 @@ describe("createSelectionNoteMutation", () => {
   it("clears the note text on update when content becomes blank", () => {
     const mutation = createSelectionNoteMutation({
       bookId: "book-1",
-      cfi: "epubcfi(/6/2[chapter]!/4/2/10)",
+      anchor: cfiAnchor,
       text: "Selected text",
       note: "   ",
       existingHighlight: { id: "hl-123" },

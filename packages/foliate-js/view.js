@@ -232,6 +232,10 @@ export class View extends HTMLElement {
   #pageProgress;
   #searchResults = new Map();
   #searchIndicatorConfig = { type: "outline", options: {} };
+  // Page-level annotations: anchored to a single page (no Range/CFI needed),
+  // used for formats without a stable text-layer (e.g. scanned PDFs, CBZ).
+  // Keyed by annotation.value so app code can dedupe across re-renders.
+  #pageAnnotations = new Map();
   #cursorAutohider = new CursorAutohider(this, () => this.hasAttribute("autohide-cursor"));
   isFixedLayout = false;
   lastLocation;
@@ -320,6 +324,7 @@ export class View extends HTMLElement {
     this.#tocProgress = null;
     this.#pageProgress = null;
     this.#searchResults = new Map();
+    this.#pageAnnotations = new Map();
     this.lastLocation = null;
     this.history.clear();
     this.tts = null;
@@ -386,6 +391,20 @@ export class View extends HTMLElement {
   }
   async addAnnotation(annotation, remove) {
     const { value, indicatorType = "outline", indicatorOptions = {} } = annotation;
+    // Page-level annotation: formats without a usable text-layer (scanned PDF,
+    // CBZ, future formats) anchor only to a page number. No CFI, no Range, no
+    // overlayer; app code listens for the `page-annotation` event to render any
+    // UI marker it wants (e.g. a margin icon, a notebook entry).
+    if (annotation.anchor?.kind === "page") {
+      const page = annotation.anchor.page;
+      const payload = { value, page, annotation, remove: !!remove };
+      if (remove) this.#pageAnnotations.delete(value);
+      else this.#pageAnnotations.set(value, annotation);
+      this.#emit("page-annotation", payload);
+      const index = Math.max(0, page - 1);
+      const label = this.#tocProgress?.getProgress(index)?.label ?? "";
+      return { index, label };
+    }
     if (value.startsWith(SEARCH_PREFIX)) {
       const cfi = value.replace(SEARCH_PREFIX, "");
       const { index, anchor } = await this.resolveNavigation(cfi);

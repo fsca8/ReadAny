@@ -21,6 +21,9 @@ export interface RelocateEvent {
 export interface SelectionEvent {
   text: string;
   cfi: string;
+  /** 1-based physical page for fixed-layout formats (PDF/CBZ); null for
+   * reflowable formats. Used as the page-anchor fallback when cfi is empty. */
+  page?: number | null;
   position: {
     x: number;
     y: number;
@@ -224,7 +227,15 @@ export function useReaderBridge(callbacks: ReaderBridgeCallbacks) {
   );
 
   const addAnnotation = useCallback(
-    (annotation: { value: string; type?: string; color?: string; note?: string }) => {
+    (annotation: {
+      value: string;
+      type?: string;
+      color?: string;
+      note?: string;
+      /** Page-level anchor (scanned PDF / CBZ). foliate-js stores these and
+       * emits `page-annotation` instead of drawing an overlayer. */
+      anchor?: { kind: "page"; page: number } | { kind: "cfi"; cfi: string };
+    }) => {
       const annotationStr = JSON.stringify(annotation);
       // Direct view.addAnnotation for immediate render + handleCommand to maintain userAnnotations map
       webViewRef.current?.injectJavaScript(`

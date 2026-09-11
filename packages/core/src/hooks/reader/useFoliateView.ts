@@ -33,6 +33,9 @@ export interface FoliateView extends HTMLElement {
   resolveCFI(cfi: string): any;
   // biome-ignore lint: foliate-js navigation targets can be hrefs, CFIs, numbers, or fraction objects
   resolveNavigation?(target: any): any;
+  // True when the book is rendered as fixed-layout pages (PDF / CBZ / pre-paginated
+  // EPUB). Used to pick a 1-based physical page for page-anchor annotations.
+  isFixedLayout?: boolean;
 
   // Annotations
   // biome-ignore lint: foliate-js annotation format

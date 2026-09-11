@@ -28,6 +28,7 @@ const sampleHighlight: Highlight = {
   id: "hl-1",
   bookId: "book-1",
   cfi: "epubcfi(/6/2!/4/2/10)",
+  anchor: { kind: "cfi", cfi: "epubcfi(/6/2!/4/2/10)" },
   text: "Important text",
   color: "yellow",
   note: "My note",
@@ -57,6 +58,8 @@ describe("highlight-queries", () => {
           id: "hl-1",
           book_id: "book-1",
           cfi: "epubcfi(/6/2!/4/2/10)",
+          anchor_kind: "cfi",
+          anchor_page: null,
           text: "Important text",
           color: "yellow",
           note: "My note",
@@ -71,6 +74,33 @@ describe("highlight-queries", () => {
       expect(highlights[0].id).toBe("hl-1");
       expect(highlights[0].bookId).toBe("book-1");
       expect(highlights[0].color).toBe("yellow");
+      expect(highlights[0].anchor).toEqual({
+        kind: "cfi",
+        cfi: "epubcfi(/6/2!/4/2/10)",
+      });
+    });
+
+    it("returns page-anchored highlights for scanned PDF / CBZ", async () => {
+      mockSelect.mockResolvedValue([
+        {
+          id: "hl-2",
+          book_id: "book-1",
+          cfi: null,
+          anchor_kind: "page",
+          anchor_page: 12,
+          text: "Selected text",
+          color: "blue",
+          note: "Page note",
+          chapter_title: null,
+          created_at: 2000,
+          updated_at: 2000,
+        },
+      ]);
+
+      const highlights = await getHighlights("book-1");
+      expect(highlights).toHaveLength(1);
+      expect(highlights[0].anchor).toEqual({ kind: "page", page: 12 });
+      expect(highlights[0].cfi).toBeUndefined();
     });
 
     it("returns highlights sorted by book position", async () => {
@@ -79,6 +109,8 @@ describe("highlight-queries", () => {
           id: "hl-10",
           book_id: "book-1",
           cfi: "epubcfi(/6/10!/4/2)",
+          anchor_kind: "cfi",
+          anchor_page: null,
           text: "Later text",
           color: "yellow",
           note: null,
@@ -90,6 +122,8 @@ describe("highlight-queries", () => {
           id: "hl-2",
           book_id: "book-1",
           cfi: "epubcfi(/6/2!/4/2)",
+          anchor_kind: "cfi",
+          anchor_page: null,
           text: "Earlier text",
           color: "yellow",
           note: null,
@@ -135,9 +169,30 @@ describe("highlight-queries", () => {
 
       const [sql, params] = mockExecute.mock.calls[0];
       expect(sql).toContain("INSERT INTO highlights");
+      // Layout: id, book_id, cfi, anchor_kind, anchor_page, text, color, ...
       expect(params[0]).toBe("hl-1");
       expect(params[1]).toBe("book-1");
-      expect(params[4]).toBe("yellow");
+      expect(params[2]).toBe("epubcfi(/6/2!/4/2/10)");
+      expect(params[3]).toBe("cfi");
+      expect(params[4]).toBeNull();
+      expect(params[6]).toBe("yellow");
+    });
+
+    it("inserts page-anchored highlight for non-text-layer formats", async () => {
+      mockExecute.mockResolvedValue(undefined);
+
+      const pageHighlight: Highlight = {
+        ...sampleHighlight,
+        id: "hl-page",
+        cfi: undefined,
+        anchor: { kind: "page", page: 7 },
+      };
+
+      await insertHighlight(pageHighlight);
+      const [, params] = mockExecute.mock.calls[0];
+      expect(params[2]).toBeNull();
+      expect(params[3]).toBe("page");
+      expect(params[4]).toBe(7);
     });
   });
 
@@ -157,6 +212,20 @@ describe("highlight-queries", () => {
 
       await updateHighlight("hl-1", { note: undefined });
       const [, params] = mockExecute.mock.calls[0];
+      expect(params).toContain(null);
+    });
+
+    it("updates anchor to page when migrating a highlight", async () => {
+      mockExecute.mockResolvedValue(undefined);
+
+      await updateHighlight("hl-1", { anchor: { kind: "page", page: 5 } });
+      const [sql, params] = mockExecute.mock.calls[0];
+      expect(sql).toContain("anchor_kind = ?");
+      expect(sql).toContain("anchor_page = ?");
+      expect(sql).toContain("cfi = ?");
+      // page anchor: kind=page, page=5, cfi=null
+      expect(params).toContain("page");
+      expect(params).toContain(5);
       expect(params).toContain(null);
     });
   });

@@ -121,6 +121,20 @@ const migrations: Migration[] = [
       "ALTER TABLE threads ADD COLUMN memory_message_count INTEGER DEFAULT 0",
     ],
   },
+  {
+    version: 14,
+    description:
+      "Add anchor_kind / anchor_page to highlights (page-level annotations for non-text-layer formats)",
+    up: [
+      // Existing rows are all CFI-anchored (the legacy `cfi` column was NOT NULL
+      // when they were inserted); backfill `anchor_kind` accordingly.
+      "ALTER TABLE highlights ADD COLUMN anchor_kind TEXT NOT NULL DEFAULT 'cfi'",
+      "ALTER TABLE highlights ADD COLUMN anchor_page INTEGER",
+      // SQLite can't drop NOT NULL from an existing column without rebuilding
+      // the table; new installs use the nullable schema in initDatabase.
+      // Existing rows keep their NOT NULL `cfi` value; new rows can omit it.
+    ],
+  },
 ];
 
 /** Run pending migrations */

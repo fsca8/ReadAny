@@ -35,7 +35,7 @@ import { getPlatformService } from "@readany/core/services";
 import { getCSSFontFace, useFontStore, useReadingSessionStore } from "@readany/core/stores";
 import { useRubyStore } from "@readany/core/stores/ruby-store";
 import { splitNarrationText } from "@readany/core/tts";
-import type { CitationPart, HighlightColor } from "@readany/core/types";
+import type { CitationPart, HighlightAnchor, HighlightColor } from "@readany/core/types";
 import { eventBus } from "@readany/core/utils/event-bus";
 import { throttle } from "@readany/core/utils/throttle";
 import { X } from "lucide-react";
@@ -743,7 +743,10 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
 
       // Add new highlights or update existing ones if note status or color changed
       for (const h of bookHighlights) {
-        if (!h.cfi) continue;
+        const anchor: HighlightAnchor = h.anchor ?? (h.cfi ? { kind: "cfi", cfi: h.cfi } : null);
+        if (!anchor) continue;
+
+        const renderKey = anchor.kind === "cfi" ? anchor.cfi : `page-${h.id}`;
 
         const existing = renderedHighlightsRef.current.get(h.id);
         const hasNote = !!h.note;
@@ -759,13 +762,23 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
           }
 
           // Add new/updated annotation
-          foliateRef.current.addAnnotation({
-            value: h.cfi,
-            type: "highlight",
-            color,
-            note: h.note, // Pass note for wavy underline + tooltip
-          });
-          renderedHighlightsRef.current.set(h.id, { cfi: h.cfi, hasNote, color });
+          if (anchor.kind === "cfi") {
+            foliateRef.current.addAnnotation({
+              value: anchor.cfi,
+              type: "highlight",
+              color,
+              note: h.note, // Pass note for wavy underline + tooltip
+            });
+          } else {
+            foliateRef.current.addAnnotation({
+              value: renderKey,
+              anchor: { kind: "page", page: anchor.page },
+              type: "highlight",
+              color,
+              note: h.note,
+            });
+          }
+          renderedHighlightsRef.current.set(h.id, { cfi: renderKey, hasNote, color });
         }
       }
     }, 100);
@@ -1421,15 +1434,33 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
 
         // Re-add all highlights
         for (const h of bookHighlights) {
-          if (h.cfi) {
+          const anchor: HighlightAnchor = h.anchor ?? (h.cfi ? { kind: "cfi", cfi: h.cfi } : null);
+          if (!anchor) continue;
+          if (anchor.kind === "cfi") {
             foliateRef.current.addAnnotation({
-              value: h.cfi,
+              value: anchor.cfi,
               type: "highlight",
               color: h.color || "yellow",
               note: h.note, // Pass note for wavy underline + tooltip
             });
             renderedHighlightsRef.current.set(h.id, {
-              cfi: h.cfi,
+              cfi: anchor.cfi,
+              hasNote: !!h.note,
+              color: h.color || "yellow",
+            });
+          } else {
+            // Page anchor: foliate-js stores it in its page-annotations map;
+            // no overlayer drawing is involved, but the bookkeeping still has to
+            // match the on-disk record so delete-by-id resolves the right entry.
+            foliateRef.current.addAnnotation({
+              value: `page-${h.id}`,
+              anchor: { kind: "page", page: anchor.page },
+              type: "highlight",
+              color: h.color || "yellow",
+              note: h.note,
+            });
+            renderedHighlightsRef.current.set(h.id, {
+              cfi: `page-${h.id}`,
               hasNote: !!h.note,
               color: h.color || "yellow",
             });
@@ -1588,24 +1619,63 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
   // --- Selection actions ---
   const handleHighlight = useCallback(
     (color: HighlightColor = viewSettings.defaultHighlightColor ?? "yellow") => {
-      if (selection && selection.cfi) {
+      if (selection && (selection.cfi || selection.page)) {
         updateReadSettings({ defaultHighlightColor: color });
-        const existingHighlight = selection.highlightId
-          ? highlights.find((h) => h.id === selection.highlightId)
-          : highlights.find((h) => h.bookId === bookId && h.cfi === selection.cfi);
+
+        // Pick the anchor: CFI wins for EPUB/text-layer PDFs; page falls back
+        // for scanned PDFs / CBZ where the text-layer is empty and CFI can't
+        // resolve back to a stable Range.
+        const anchor: HighlightAnchor = selection.cfi
+          ? { kind: "cfi", cfi: selection.cfi }
+          : { kind: "page", page: selection.page ?? 1 };
+
+        const existingHighlight = (() => {
+          if (selection.highlightId) {
+            return highlights.find((h: { id: string }) => h.id === selection.highlightId);
+          }
+          if (anchor.kind === "cfi") {
+            return highlights.find(
+              (h: { bookId: string; cfi?: string }) =>
+                h.bookId === bookId && h.cfi === selection.cfi,
+            );
+          }
+          const targetPage = anchor.page;
+          return highlights.find(
+            (h: { bookId: string; anchor?: HighlightAnchor; cfi?: string }) => {
+              if (h.bookId !== bookId) return false;
+              const existingAnchor: HighlightAnchor | undefined =
+                h.anchor ?? (h.cfi ? { kind: "cfi" as const, cfi: h.cfi } : undefined);
+              return existingAnchor?.kind === "page" && existingAnchor.page === targetPage;
+            },
+          );
+        })();
 
         if (existingHighlight) {
           useAnnotationStore.getState().updateHighlight(existingHighlight.id, {
             color,
             updatedAt: Date.now(),
           });
-          foliateRef.current?.deleteAnnotation({ value: existingHighlight.cfi });
-          foliateRef.current?.addAnnotation({
-            value: existingHighlight.cfi,
-            type: "highlight",
-            color,
-            note: existingHighlight.note,
-          });
+          if (anchor.kind === "cfi") {
+            foliateRef.current?.deleteAnnotation({ value: existingHighlight.cfi });
+            foliateRef.current?.addAnnotation({
+              value: existingHighlight.cfi,
+              type: "highlight",
+              color,
+              note: existingHighlight.note,
+            });
+          } else {
+            const pageValue = anchor.page;
+            foliateRef.current?.deleteAnnotation({
+              value: `page-${existingHighlight.id}`,
+            });
+            foliateRef.current?.addAnnotation({
+              value: `page-${existingHighlight.id}`,
+              anchor: { kind: "page", page: pageValue },
+              type: "highlight",
+              color,
+              note: existingHighlight.note,
+            });
+          }
           setSelection(null);
           return;
         }
@@ -1617,7 +1687,8 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
           id: highlightId,
           bookId,
           text: selection.text,
-          cfi: selection.cfi,
+          cfi: anchor.kind === "cfi" ? anchor.cfi : undefined,
+          anchor,
           color,
           chapterTitle: readerTab?.chapterTitle || undefined,
           createdAt: Date.now(),
@@ -1625,15 +1696,24 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
         });
 
         // Immediately render on page (don't wait for useEffect)
-        foliateRef.current?.addAnnotation({
-          value: selection.cfi,
-          type: "highlight",
-          color,
-        });
+        if (anchor.kind === "cfi") {
+          foliateRef.current?.addAnnotation({
+            value: anchor.cfi,
+            type: "highlight",
+            color,
+          });
+        } else {
+          foliateRef.current?.addAnnotation({
+            value: `page-${highlightId}`,
+            anchor: { kind: "page", page: anchor.page },
+            type: "highlight",
+            color,
+          });
+        }
 
         // Track as rendered
         renderedHighlightsRef.current.set(highlightId, {
-          cfi: selection.cfi,
+          cfi: anchor.kind === "cfi" ? anchor.cfi : `page-${highlightId}`,
           hasNote: false,
           color,
         });
@@ -1652,10 +1732,29 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
 
   // Handle note button - open notebook panel with pending note
   const handleNote = useCallback(() => {
-    if (selection && selection.cfi) {
+    console.log("[handleNote] called", {
+      hasSelection: !!selection,
+      cfi: selection?.cfi,
+      page: selection?.page,
+      textLen: selection?.text?.length ?? 0,
+    });
+    if (selection && (selection.cfi || selection.page)) {
+      const anchor: HighlightAnchor = selection.cfi
+        ? { kind: "cfi", cfi: selection.cfi }
+        : { kind: "page", page: selection.page ?? 1 };
+
       // Check if this selection is already highlighted
       const existingHighlight = highlights.find(
-        (h) => h.bookId === bookId && h.cfi === selection.cfi,
+        (h: { bookId: string; anchor?: HighlightAnchor; cfi?: string }) => {
+          if (h.bookId !== bookId) return false;
+          const existingAnchor: HighlightAnchor | undefined =
+            h.anchor ?? (h.cfi ? { kind: "cfi" as const, cfi: h.cfi } : undefined);
+          if (!existingAnchor || existingAnchor.kind !== anchor.kind) return false;
+          if (anchor.kind === "cfi") {
+            return (existingAnchor as { kind: "cfi"; cfi: string }).cfi === anchor.cfi;
+          }
+          return (existingAnchor as { kind: "page"; page: number }).page === anchor.page;
+        },
       );
 
       if (existingHighlight) {
@@ -1665,7 +1764,8 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
         // Start new note
         useNotebookStore.getState().startNewNote({
           text: selection.text,
-          cfi: selection.cfi,
+          cfi: anchor.kind === "cfi" ? anchor.cfi : undefined,
+          anchor,
           chapterTitle: readerTab?.chapterTitle,
         });
       }
@@ -1680,12 +1780,17 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
 
   // Handle removing an existing highlight
   const handleRemoveHighlight = useCallback(() => {
-    if (selection?.annotated && selection?.highlightId && selection?.cfi) {
+    if (selection?.annotated && selection?.highlightId && (selection?.cfi || selection?.page)) {
       // Remove from store
       useAnnotationStore.getState().removeHighlight(selection.highlightId);
 
-      // Remove from view
-      foliateRef.current?.deleteAnnotation({ value: selection.cfi });
+      // Remove from view. CFI anchors were registered with `value = cfi`;
+      // page anchors were registered with `value = "page-${id}"`.
+      if (selection.cfi) {
+        foliateRef.current?.deleteAnnotation({ value: selection.cfi });
+      } else if (selection.page) {
+        foliateRef.current?.deleteAnnotation({ value: `page-${selection.highlightId}` });
+      }
 
       // Remove from rendered tracking
       renderedHighlightsRef.current.delete(selection.highlightId);
@@ -2879,8 +2984,25 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
             note,
           });
         }}
-        onDeleteAnnotation={(cfi) => {
-          foliateRef.current?.deleteAnnotation({ value: cfi });
+        onDeleteAnnotation={(highlightId) => {
+          // Look up the highlight in the store so we know whether to use the
+          // CFI or the page anchor's "page-${id}" foliate value.
+          const highlight = highlights.find(
+            (h: { id: string }) => h.id === highlightId,
+          );
+          if (!highlight) {
+            // Fallback: best-effort CFI delete (legacy path).
+            foliateRef.current?.deleteAnnotation({ value: highlightId });
+            return;
+          }
+          const anchor = highlight.anchor;
+          if (anchor?.kind === "page") {
+            foliateRef.current?.deleteAnnotation({ value: `page-${highlightId}` });
+          } else if (anchor?.kind === "cfi") {
+            foliateRef.current?.deleteAnnotation({ value: anchor.cfi });
+          } else if (highlight.cfi) {
+            foliateRef.current?.deleteAnnotation({ value: highlight.cfi });
+          }
         }}
         panelWidth={notebookPanel.width}
         onResize={notebookPanel.handleResize}
@@ -3030,7 +3152,6 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
                 annotated={selection.annotated}
                 currentColor={selection.color as HighlightColor | undefined}
                 defaultColor={viewSettings.defaultHighlightColor ?? "yellow"}
-                isPdf={bookFormat === "PDF"}
                 onHighlight={handleHighlight}
                 onRemoveHighlight={handleRemoveHighlight}
                 onNote={handleNote}
@@ -3225,7 +3346,7 @@ function NotebookSidebarWrapper({
   bookId: string;
   onGoToCfi: (cfi: string) => void;
   onAddAnnotation: (cfi: string, color: string, note?: string) => void;
-  onDeleteAnnotation: (cfi: string) => void;
+  onDeleteAnnotation: (highlightId: string) => void;
   panelWidth: number;
   onResize: (delta: number, side: "left" | "right") => void;
   onResizeStart: () => void;

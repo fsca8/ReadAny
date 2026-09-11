@@ -42,7 +42,7 @@ import { useReadingSession } from "@readany/core/hooks/use-reading-session";
 import { createSelectionNoteMutation } from "@readany/core/reader";
 import { getPlatformService } from "@readany/core/services";
 import { getCSSFontFace, useFontStore } from "@readany/core/stores";
-import type { HighlightColor, ReadSettings, TOCItem } from "@readany/core/types";
+import type { HighlightAnchor, HighlightColor, ReadSettings, TOCItem } from "@readany/core/types";
 import { eventBus } from "@readany/core/utils/event-bus";
 import { throttle } from "@readany/core/utils/throttle";
 import { Asset } from "expo-asset";
@@ -149,11 +149,7 @@ const NOTE_TOOLTIP_TOP_THRESHOLD = 180;
 import { useRubyStore } from "@readany/core/stores/ruby-store";
 import { ReaderSettingsPanel } from "./reader/ReaderSettingsPanel";
 import { ReaderTOCPanel } from "./reader/ReaderTOCPanel";
-import {
-  CONTROLS_TIMEOUT,
-  SCREEN_HEIGHT,
-  SCREEN_WIDTH,
-} from "./reader/reader-constants";
+import { CONTROLS_TIMEOUT, SCREEN_HEIGHT, SCREEN_WIDTH } from "./reader/reader-constants";
 import { BatteryIcon, ListIcon, SettingsIcon } from "./reader/reader-icons";
 import { makeStyles, noteTooltipMdStyles } from "./reader/reader-styles";
 import { useReaderBookmark } from "./reader/useReaderBookmark";
@@ -848,9 +844,15 @@ export function ReaderScreen({ route, navigation }: Props) {
       suppressReaderTapUntilRef.current = Date.now() + 650;
       const highlight = highlights.find((h) => h.cfi === detail.value);
       if (!highlight) return;
+      const anchor: HighlightAnchor | undefined =
+        highlight.anchor ??
+        (highlight.cfi ? { kind: "cfi" as const, cfi: highlight.cfi } : undefined);
       setSelection({
         text: highlight.text,
-        cfi: highlight.cfi,
+        // SelectionEvent.cfi is a plain string; page-anchored highlights have
+        // no CFI, so use "" (falsy) — callers fall through to `page`.
+        cfi: highlight.cfi ?? "",
+        page: anchor?.kind === "page" ? anchor.page : undefined,
         position: detail.position,
       });
     },
@@ -908,10 +910,25 @@ export function ReaderScreen({ route, navigation }: Props) {
       appActive,
     // 维护约定：任何新增遮盖正文/输入态/导航跳转，必须在此追加判定。
     [
-      readSettings.volumeButtonsPageTurn, webViewReady, loading, error, isReimporting,
-      showSearch, showTOC, showSettings, showNotebook, showTTS,
-      showTranslation, showChapterTranslation, chapterTranslation.state.status,
-      selection, noteViewHighlight, noteTooltip, ttsPlayState, isFocused, appActive,
+      readSettings.volumeButtonsPageTurn,
+      webViewReady,
+      loading,
+      error,
+      isReimporting,
+      showSearch,
+      showTOC,
+      showSettings,
+      showNotebook,
+      showTTS,
+      showTranslation,
+      showChapterTranslation,
+      chapterTranslation.state.status,
+      selection,
+      noteViewHighlight,
+      noteTooltip,
+      ttsPlayState,
+      isFocused,
+      appActive,
     ],
   );
 
@@ -998,8 +1015,23 @@ export function ReaderScreen({ route, navigation }: Props) {
       if (!selection) return;
       updateReadSettings({ defaultHighlightColor: color });
 
+      // Anchor: CFI for text-layer formats (EPUB/MOBI/text-PDF); page fallback
+      // for fixed-layout formats without a stable text-layer (scanned PDF, CBZ).
+      const anchor: HighlightAnchor = selection.cfi
+        ? { kind: "cfi", cfi: selection.cfi }
+        : { kind: "page", page: selection.page ?? 1 };
+
       const existingHighlight = highlights.find(
-        (h) => h.bookId === bookId && h.cfi === selection.cfi,
+        (h: { bookId: string; anchor?: HighlightAnchor; cfi?: string }) => {
+          if (h.bookId !== bookId) return false;
+          const existingAnchor: HighlightAnchor | undefined =
+            h.anchor ?? (h.cfi ? { kind: "cfi" as const, cfi: h.cfi } : undefined);
+          if (!existingAnchor || existingAnchor.kind !== anchor.kind) return false;
+          if (anchor.kind === "cfi") {
+            return (existingAnchor as { kind: "cfi"; cfi: string }).cfi === anchor.cfi;
+          }
+          return (existingAnchor as { kind: "page"; page: number }).page === anchor.page;
+        },
       );
 
       if (existingHighlight) {
@@ -1007,21 +1039,41 @@ export function ReaderScreen({ route, navigation }: Props) {
           color,
           updatedAt: Date.now(),
         });
-        bridge.removeAnnotation({ value: existingHighlight.cfi });
-        bridge.addAnnotation({
-          value: existingHighlight.cfi,
-          type: "highlight",
-          color,
-          note: existingHighlight.note,
-        });
+        if (anchor.kind === "cfi") {
+          const existingCfi = existingHighlight.cfi;
+          if (!existingCfi) {
+            setSelection(null);
+            return;
+          }
+          bridge.removeAnnotation({ value: existingCfi });
+          bridge.addAnnotation({
+            value: existingCfi,
+            type: "highlight",
+            color,
+            note: existingHighlight.note,
+          });
+        } else {
+          const pageKey = `page-${existingHighlight.id}`;
+          bridge.removeAnnotation({ value: pageKey });
+          bridge.addAnnotation({
+            value: pageKey,
+            anchor: { kind: "page", page: anchor.page },
+            type: "highlight",
+            color,
+            note: existingHighlight.note,
+          });
+        }
         setSelection(null);
         return;
       }
 
+      const highlightId = `hl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const renderKey = anchor.kind === "cfi" ? anchor.cfi : `page-${highlightId}`;
       const highlight = {
-        id: `hl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        id: highlightId,
         bookId,
-        cfi: selection.cfi,
+        cfi: anchor.kind === "cfi" ? anchor.cfi : undefined,
+        anchor,
         text: selection.text,
         color,
         chapterTitle: currentChapter,
@@ -1029,7 +1081,16 @@ export function ReaderScreen({ route, navigation }: Props) {
         updatedAt: Date.now(),
       };
       addHighlight(highlight);
-      bridge.addAnnotation({ value: selection.cfi, type: "highlight", color });
+      if (anchor.kind === "cfi") {
+        bridge.addAnnotation({ value: anchor.cfi, type: "highlight", color });
+      } else {
+        bridge.addAnnotation({
+          value: renderKey,
+          anchor: { kind: "page", page: anchor.page },
+          type: "highlight",
+          color,
+        });
+      }
       setSelection(null);
     },
     [
@@ -1278,7 +1339,24 @@ export function ReaderScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!webViewReady || loading || highlights.length === 0) return;
     for (const h of highlights) {
-      bridge.addAnnotation({ value: h.cfi, type: "highlight", color: h.color, note: h.note });
+      const anchor: HighlightAnchor = h.anchor ?? (h.cfi ? { kind: "cfi", cfi: h.cfi } : null);
+      if (!anchor) continue;
+      if (anchor.kind === "cfi") {
+        bridge.addAnnotation({
+          value: anchor.cfi,
+          type: "highlight",
+          color: h.color,
+          note: h.note,
+        });
+      } else {
+        bridge.addAnnotation({
+          value: `page-${h.id}`,
+          anchor: { kind: "page", page: anchor.page },
+          type: "highlight",
+          color: h.color,
+          note: h.note,
+        });
+      }
     }
   }, [webViewReady, loading, highlights]);
 
@@ -1426,10 +1504,22 @@ export function ReaderScreen({ route, navigation }: Props) {
   });
 
   const isPanelOpen = showTOC || showSettings || showSearch || showNotebook || showTranslation;
+  // Match by anchor, not by raw cfi: page-anchored highlights (scanned PDF /
+  // CBZ) have no cfi, so `h.cfi === selection.cfi` would be `undefined ===
+  // undefined` and match an unrelated record on a different page.
   const existingSelectionHighlight = selection
-    ? (highlights.find(
-        (highlight) => highlight.bookId === bookId && highlight.cfi === selection.cfi,
-      ) ?? null)
+    ? (highlights.find((highlight) => {
+        if (highlight.bookId !== bookId) return false;
+        const existingAnchor: HighlightAnchor | undefined =
+          highlight.anchor ??
+          (highlight.cfi ? { kind: "cfi" as const, cfi: highlight.cfi } : undefined);
+        if (selection.cfi) {
+          return existingAnchor?.kind === "cfi" && existingAnchor.cfi === selection.cfi;
+        }
+        return (
+          existingAnchor?.kind === "page" && existingAnchor.page === (selection.page ?? 1)
+        );
+      }) ?? null)
     : null;
   const readerTopMargin = !showSearch
     ? showTopTitleProgress
@@ -1622,9 +1712,16 @@ export function ReaderScreen({ route, navigation }: Props) {
             });
           }}
           onNote={(text, cfi) => {
+            const popoverCfi = selectionPopoverSelection.cfi;
+            const popoverPage = selectionPopoverSelection.page;
+            const noteAnchor: HighlightAnchor = popoverCfi
+              ? { kind: "cfi", cfi: popoverCfi }
+              : { kind: "page", page: popoverPage ?? 1 };
+
             const mutation = createSelectionNoteMutation({
               bookId,
               cfi,
+              anchor: noteAnchor,
               text: selectionPopoverSelection.text,
               note: text,
               chapterTitle: currentChapter,
@@ -1634,22 +1731,48 @@ export function ReaderScreen({ route, navigation }: Props) {
 
             if (mutation.kind === "create") {
               addHighlight(mutation.highlight);
-              bridge.addAnnotation({
-                value: cfi,
-                type: "highlight",
-                color: mutation.highlight.color,
-                note: mutation.highlight.note,
-              });
+              if (noteAnchor.kind === "cfi") {
+                bridge.addAnnotation({
+                  value: noteAnchor.cfi,
+                  type: "highlight",
+                  color: mutation.highlight.color,
+                  note: mutation.highlight.note,
+                });
+              } else {
+                bridge.addAnnotation({
+                  value: `page-${mutation.highlight.id}`,
+                  anchor: { kind: "page", page: noteAnchor.page },
+                  type: "highlight",
+                  color: mutation.highlight.color,
+                  note: mutation.highlight.note,
+                });
+              }
               return;
             }
 
             updateHighlight(mutation.id, mutation.updates);
-            bridge.addAnnotation({
-              value: cfi,
-              type: "highlight",
-              color: existingSelectionHighlight?.color || "yellow",
-              note: mutation.updates.note,
-            });
+            // Re-render the existing highlight (anchor.kind determines the
+            // foliate-js value).
+            const renderKey =
+              existingSelectionHighlight?.anchor?.kind === "page"
+                ? `page-${mutation.id}`
+                : (existingSelectionHighlight?.cfi ?? cfi);
+            if (noteAnchor.kind === "cfi" || existingSelectionHighlight?.anchor?.kind === "cfi") {
+              bridge.addAnnotation({
+                value: cfi,
+                type: "highlight",
+                color: existingSelectionHighlight?.color || "yellow",
+                note: mutation.updates.note,
+              });
+            } else {
+              bridge.addAnnotation({
+                value: renderKey,
+                anchor: { kind: "page", page: noteAnchor.page },
+                type: "highlight",
+                color: existingSelectionHighlight?.color || "yellow",
+                note: mutation.updates.note,
+              });
+            }
           }}
           onTranslate={(text) => {
             setShowTranslation(true);
@@ -1666,12 +1789,33 @@ export function ReaderScreen({ route, navigation }: Props) {
           }
           defaultColor={readSettings.defaultHighlightColor ?? "yellow"}
           onRemoveHighlight={() => {
-            const existing = highlights.find(
-              (h) => h.bookId === bookId && h.cfi === selectionPopoverSelection.cfi,
-            );
+            const selCfi = selectionPopoverSelection.cfi;
+            const selPage = selectionPopoverSelection.page;
+            const existing = (() => {
+              if (selCfi) {
+                return highlights.find(
+                  (h: { bookId: string; cfi?: string }) => h.bookId === bookId && h.cfi === selCfi,
+                );
+              }
+              const targetPage = selPage ?? 1;
+              return highlights.find(
+                (h: { bookId: string; anchor?: HighlightAnchor; cfi?: string }) => {
+                  if (h.bookId !== bookId) return false;
+                  const a: HighlightAnchor | undefined =
+                    h.anchor ?? (h.cfi ? { kind: "cfi" as const, cfi: h.cfi } : undefined);
+                  return a?.kind === "page" && a.page === targetPage;
+                },
+              );
+            })();
             if (existing) {
               removeHighlight(existing.id);
-              bridge.removeAnnotation({ value: existing.cfi });
+              const existingAnchor: HighlightAnchor =
+                existing.anchor ?? (existing.cfi ? { kind: "cfi", cfi: existing.cfi } : null);
+              if (existingAnchor?.kind === "page") {
+                bridge.removeAnnotation({ value: `page-${existing.id}` });
+              } else if (existing.cfi) {
+                bridge.removeAnnotation({ value: existing.cfi });
+              }
             }
           }}
         />

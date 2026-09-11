@@ -48,6 +48,7 @@ const highlight: Highlight = {
   id: "highlight-1",
   bookId: "book-1",
   cfi: "epubcfi(/6/8)",
+  anchor: { kind: "cfi", cfi: "epubcfi(/6/8)" },
   text: "Draft-first editing keeps users safe.",
   color: "yellow",
   note: "Important safety point",

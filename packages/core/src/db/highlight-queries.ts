@@ -1,5 +1,5 @@
 import { sortAnnotationsByPosition } from "../reader/annotation-order";
-import type { Highlight } from "../types";
+import type { Highlight, HighlightAnchor } from "../types/annotation";
 import { getDB, getDeviceId, insertTombstone, nextSyncVersion, nextUpdatedAt } from "./db-core";
 
 /** Extended highlight with book info for notes page */
@@ -9,80 +9,75 @@ export interface HighlightWithBook extends Highlight {
   bookCoverUrl?: string;
 }
 
-export async function getHighlights(bookId: string): Promise<Highlight[]> {
-  const database = await getDB();
-  const rows = await database.select<{
-    id: string;
-    book_id: string;
-    cfi: string;
-    text: string;
-    color: string;
-    note: string | null;
-    chapter_title: string | null;
-    created_at: number;
-    updated_at: number;
-  }>("SELECT * FROM highlights WHERE book_id = ? ORDER BY created_at DESC", [bookId]);
-  return sortAnnotationsByPosition(
-    rows.map((r) => ({
-      id: r.id,
-      bookId: r.book_id,
-      cfi: r.cfi,
-      text: r.text,
-      color: r.color as Highlight["color"],
-      note: r.note || undefined,
-      chapterTitle: r.chapter_title || undefined,
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    })),
-  );
+interface HighlightRow {
+  id: string;
+  book_id: string;
+  cfi: string | null;
+  anchor_kind: "cfi" | "page";
+  anchor_page: number | null;
+  text: string;
+  color: string;
+  note: string | null;
+  chapter_title: string | null;
+  created_at: number;
+  updated_at: number;
 }
 
-/** Get all highlights across all books (for general chat without bookId) */
-export async function getAllHighlights(limit = 50): Promise<Highlight[]> {
-  const database = await getDB();
-  const rows = await database.select<{
-    id: string;
-    book_id: string;
-    cfi: string;
-    text: string;
-    color: string;
-    note: string | null;
-    chapter_title: string | null;
-    created_at: number;
-    updated_at: number;
-  }>("SELECT * FROM highlights ORDER BY created_at DESC LIMIT ?", [limit]);
-  return rows.map((r) => ({
+const rowToHighlight = (r: HighlightRow): Highlight => {
+  // Defensive: a "cfi" row whose cfi is null/empty (data written before the
+  // anchor columns existed, or a partially-applied update) would produce an
+  // unresolvable empty CFI. Fall back to a page anchor so the record still
+  // renders and can be deleted instead of throwing in foliate-js.
+  const anchor: HighlightAnchor =
+    r.anchor_kind === "page" || !r.cfi
+      ? { kind: "page", page: r.anchor_page ?? 1 }
+      : { kind: "cfi", cfi: r.cfi };
+  return {
     id: r.id,
     bookId: r.book_id,
-    cfi: r.cfi,
+    cfi: r.cfi ?? undefined,
+    anchor,
     text: r.text,
     color: r.color as Highlight["color"],
     note: r.note || undefined,
     chapterTitle: r.chapter_title || undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
-  }));
+  };
+};
+
+export async function getHighlights(bookId: string): Promise<Highlight[]> {
+  const database = await getDB();
+  const rows = await database.select<HighlightRow>(
+    "SELECT * FROM highlights WHERE book_id = ? ORDER BY created_at DESC",
+    [bookId],
+  );
+  return sortAnnotationsByPosition(rows.map(rowToHighlight));
+}
+
+/** Get all highlights across all books (for general chat without bookId) */
+export async function getAllHighlights(limit = 50): Promise<Highlight[]> {
+  const database = await getDB();
+  const rows = await database.select<HighlightRow>(
+    "SELECT * FROM highlights ORDER BY created_at DESC LIMIT ?",
+    [limit],
+  );
+  return rows.map(rowToHighlight);
 }
 
 /** Get all highlights with book info (JOIN query) */
 export async function getAllHighlightsWithBooks(limit = 500): Promise<HighlightWithBook[]> {
   const database = await getDB();
-  const rows = await database.select<{
-    id: string;
-    book_id: string;
-    cfi: string;
-    text: string;
-    color: string;
-    note: string | null;
-    chapter_title: string | null;
-    created_at: number;
-    updated_at: number;
-    book_title: string;
-    book_author: string;
-    book_cover_url: string | null;
-  }>(
-    `SELECT 
-      h.id, h.book_id, h.cfi, h.text, h.color, h.note, h.chapter_title, h.created_at, h.updated_at,
+  const rows = await database.select<
+    HighlightRow & {
+      book_title: string;
+      book_author: string;
+      book_cover_url: string | null;
+    }
+  >(
+    `SELECT
+      h.id, h.book_id, h.cfi, h.anchor_kind, h.anchor_page,
+      h.text, h.color, h.note, h.chapter_title, h.created_at, h.updated_at,
       b.title as book_title, b.author as book_author, b.cover_url as book_cover_url
     FROM highlights h
     LEFT JOIN books b ON h.book_id = b.id
@@ -91,15 +86,7 @@ export async function getAllHighlightsWithBooks(limit = 500): Promise<HighlightW
     [limit],
   );
   return rows.map((r) => ({
-    id: r.id,
-    bookId: r.book_id,
-    cfi: r.cfi,
-    text: r.text,
-    color: r.color as Highlight["color"],
-    note: r.note || undefined,
-    chapterTitle: r.chapter_title || undefined,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
+    ...rowToHighlight(r),
     bookTitle: r.book_title || "",
     bookAuthor: r.book_author || "",
     bookCoverUrl: r.book_cover_url || undefined,
@@ -153,12 +140,21 @@ export async function insertHighlight(highlight: Highlight): Promise<void> {
   const database = await getDB();
   const deviceId = await getDeviceId();
   const syncVersion = await nextSyncVersion(database, "highlights");
+  const anchor =
+    highlight.anchor ??
+    (highlight.cfi
+      ? { kind: "cfi" as const, cfi: highlight.cfi }
+      : { kind: "page" as const, page: 1 });
+  const cfi = anchor.kind === "cfi" ? anchor.cfi : null;
+  const anchorPage = anchor.kind === "page" ? anchor.page : null;
   await database.execute(
-    "INSERT INTO highlights (id, book_id, cfi, text, color, note, chapter_title, created_at, updated_at, sync_version, last_modified_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO highlights (id, book_id, cfi, anchor_kind, anchor_page, text, color, note, chapter_title, created_at, updated_at, sync_version, last_modified_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     [
       highlight.id,
       highlight.bookId,
-      highlight.cfi,
+      cfi,
+      anchor.kind,
+      anchorPage,
       highlight.text,
       highlight.color,
       highlight.note || null,
@@ -176,6 +172,15 @@ export async function updateHighlight(id: string, updates: Partial<Highlight>): 
   const sets: string[] = [];
   const values: unknown[] = [];
 
+  if (updates.anchor !== undefined) {
+    sets.push("anchor_kind = ?", "anchor_page = ?", "cfi = ?");
+    const a = updates.anchor;
+    values.push(a.kind, a.kind === "page" ? a.page : null, a.kind === "cfi" ? a.cfi : null);
+  } else if (updates.cfi !== undefined) {
+    // Legacy path: allow updating `cfi` without touching anchor (no-op today).
+    sets.push("cfi = ?");
+    values.push(updates.cfi);
+  }
   if (updates.color !== undefined) {
     sets.push("color = ?");
     values.push(updates.color);

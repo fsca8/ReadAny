@@ -28,6 +28,7 @@ const baseHighlight: Highlight = {
   id: "hl-1",
   bookId: "book-1",
   cfi: "epubcfi(/6/2[chapter]!/4/2/10)",
+  anchor: { kind: "cfi", cfi: "epubcfi(/6/2[chapter]!/4/2/10)" },
   text: "Selected text",
   color: "yellow",
   note: "Original note",
