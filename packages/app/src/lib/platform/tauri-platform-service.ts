@@ -7,7 +7,7 @@
  * All Tauri imports are dynamic so the module graph stays clean in SSR/test contexts.
  */
 import type {
-  type FileTransferOptions,
+  FileTransferOptions,
   FetchOptions,
   FilePickerOptions,
   IDatabase,
