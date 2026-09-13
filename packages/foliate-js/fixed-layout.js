@@ -23,6 +23,16 @@ const getViewport = (doc, viewport) => {
   const img = doc.querySelector("img");
   if (img) return { width: img.naturalWidth, height: img.naturalHeight };
 
+  // SVG pages carry their canvas size in the viewBox (e.g. SVG-based covers
+  // whose width/height attributes are just "100%")
+  const svg = doc.querySelector("svg");
+  if (svg) {
+    const viewBox = svg.getAttribute("viewBox")?.split(/[\s,]+/);
+    const width = Number.parseFloat(viewBox?.[2]);
+    const height = Number.parseFloat(viewBox?.[3]);
+    if (width > 0 && height > 0) return { width, height };
+  }
+
   // just show *something*, i guess...
   console.warn(new Error("Missing viewport properties"));
   return { width: 1000, height: 2000 };
