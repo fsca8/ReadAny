@@ -3389,6 +3389,7 @@ function applyRendererSettings(
       view.book.rendition.spread = spreadMode;
     }
     renderer.setAttribute("spread", spreadMode);
+    applyFixedLayoutFlow(view, settings);
   } else {
     // Reflowable: columns, sizes, margins
     const isSinglePage = (settings.paginatedLayout ?? "double") === "single";
@@ -3406,6 +3407,23 @@ function applyRendererSettings(
 
   // Apply CSS styles (skip font overrides for fixed layout)
   applyRendererStyles(view, settings, isFixedLayout, theme);
+}
+
+/**
+ * Fixed-layout (PDF/CBZ) flow: fixed layout is not limited to paginated
+ * flipping. Setting `flow="scrolled"` hands the pages to the foliate-fxl
+ * renderer's continuous scroll mode (one page after another, loaded lazily),
+ * and removing it restores paginated flipping. The renderer keeps the reader's
+ * page across the switch.
+ */
+function applyFixedLayoutFlow(view: FoliateView, settings: ViewSettings) {
+  const renderer = view.renderer;
+  if (!renderer) return;
+  if (settings.viewMode === "scroll") {
+    renderer.setAttribute("flow", "scrolled");
+  } else {
+    renderer.removeAttribute("flow");
+  }
 }
 
 function applyReflowLayoutSettings(view: FoliateView, settings: ViewSettings) {
