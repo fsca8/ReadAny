@@ -53,6 +53,87 @@ function getThemeColors(theme: AppTheme) {
   return THEME_COLORS[theme];
 }
 
+/** Relative luminance of a hex/rgb()/rgba() color; null when unparsable. */
+function parseCssColor(input: string): [number, number, number] | null {
+  const s = input.trim().toLowerCase();
+  let m = s.match(/^#([0-9a-f]{3})$/);
+  if (m)
+    return [
+      parseInt(m[1][0] + m[1][0], 16),
+      parseInt(m[1][1] + m[1][1], 16),
+      parseInt(m[1][2] + m[1][2], 16),
+    ];
+  m = s.match(/^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/);
+  if (m) {
+    const n = parseInt(m[1], 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  m = s.match(/^rgba?\((\d+)[\s,]+(\d+)[\s,]+(\d+)/);
+  if (m) return [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (s === "white") return [255, 255, 255];
+  return null;
+}
+
+function isLightColor(color: string): boolean {
+  const rgb = parseCssColor(color);
+  if (!rgb) return false;
+  // Same threshold Readest uses: > 0.85 ≈ white-ish surface in dark mode.
+  return (0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]) / 255 > 0.85;
+}
+
+// Original background colors captured before a dark-mode rewrite, keyed by
+// the CSSStyleRule or element that was touched, so switching back to a light
+// theme can restore exactly what the book declared.
+const ORIGINAL_BOOK_BG = new WeakMap<object, string>();
+
+/**
+ * Dark mode: books often hard-code light surfaces (white figure boxes, paper
+ * panels) that glare against the dark theme. Rewrite every light background
+ * color the book declares — inline styles and its <style> sheets via CSSOM,
+ * so all color syntaxes are handled — to the theme background. Background
+ * images are preserved (only the color longhand is touched). On a light
+ * theme, previously rewritten colors are restored to the book's originals.
+ */
+function rewriteBookBackgrounds(doc: Document, theme: AppTheme) {
+  const dark = theme === "dark";
+  const bgColor = getThemeColors(theme).bg;
+  const apply = (style: CSSStyleDeclaration, host: object) => {
+    const current = style.backgroundColor;
+    if (dark) {
+      if (!isLightColor(current)) return;
+      if (!ORIGINAL_BOOK_BG.has(host)) ORIGINAL_BOOK_BG.set(host, current);
+      style.backgroundColor = bgColor;
+    } else if (ORIGINAL_BOOK_BG.has(host)) {
+      style.backgroundColor = ORIGINAL_BOOK_BG.get(host)!;
+      ORIGINAL_BOOK_BG.delete(host);
+    }
+  };
+  const visit = (rules: CSSRuleList) => {
+    for (const rule of Array.from(rules)) {
+      const style = (rule as CSSStyleRule).style;
+      if (style) {
+        apply(style, rule);
+      } else {
+        const nested = (rule as CSSRule & { cssRules?: CSSRuleList }).cssRules;
+        if (nested) visit(nested);
+      }
+    }
+  };
+  for (const sheet of Array.from(doc.styleSheets)) {
+    let rules: CSSRuleList;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      continue; // cross-origin sheet — not ours to read
+    }
+    visit(rules);
+  }
+  if (!doc.body) return;
+  for (const el of Array.from(doc.body.querySelectorAll<HTMLElement>("[style]"))) {
+    apply(el.style, el);
+  }
+}
+
 /** Per-theme CSS filter applied to PDF pages (fixed layout) in dark/sepia mode. */
 const PDF_THEME_FILTERS: Partial<Record<AppTheme, string>> = {
   dark: "invert(0.93)",
@@ -2929,6 +3010,7 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
       }
       applyRendererStyles(view, viewSettings, false, appTheme);
     }, [
+      viewReady,
       viewSettings.fontSize,
       viewSettings.lineHeight,
       viewSettings.fontTheme,
@@ -2971,6 +3053,7 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
 
       applyReflowLayoutSettings(view, viewSettings);
     }, [
+      viewReady,
       viewSettings.viewMode,
       viewSettings.paginatedLayout,
       viewSettings.fixedLayoutZoom,
@@ -3107,6 +3190,7 @@ function applyDocumentStyles(
   normalizeBrOnlyParagraphs(doc);
   syncRemoteFontStylesInDocument(doc, settings.customFontCssUrls);
   syncReaderOverrideStylesInDocument(doc, getRendererStyles(settings, theme));
+  if (theme === "dark") rewriteBookBackgrounds(doc, theme);
 }
 
 function syncReaderOverrideStylesInDocument(doc: Document, css: string) {
@@ -3489,6 +3573,12 @@ function applyRendererStyles(
   const styles = getRendererStyles(settings, theme);
   renderer.setStyles(styles);
   syncReaderOverrideStyles(view, styles);
+  // Re-walk loaded sections so a theme switch rewrites (dark) or restores
+  // (light) the book's own light background declarations.
+  for (const content of getRendererContents(view)) {
+    const doc = content?.doc as Document | undefined;
+    if (doc) rewriteBookBackgrounds(doc, theme);
+  }
 }
 
 /**
