@@ -74,6 +74,8 @@
     "preserveDeleteDataLabel": "Keep notes and reading stats",
     "preserveDeleteDataHint": "Can be restored when you re-import the same book",
     "batchDeleteConfirm": "Delete the {{count}} selected book(s)?",
+    "deleteGroupTitle": "Remove this group?",
+    "deleteGroupDescription": "Group \"{{name}}\" will be removed. Its books stay in your library.",
     "changeGroup": "Change group",
     "createGroup": "New group",
     "deleteTagConfirm": "Delete tag \"{{tag}}\"?",

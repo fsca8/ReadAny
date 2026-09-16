@@ -1,4 +1,5 @@
 import { useResolvedSrc } from "@/hooks/use-resolved-src";
+import { blurActiveElement } from "@/lib/ui/blur-active-element";
 import type { Book, BookGroup } from "@readany/core/types";
 import { Folder, MoreVertical, Pencil, Trash2 } from "lucide-react";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
@@ -191,6 +192,9 @@ export const GroupCard = memo(function GroupCard({
               type="button"
               className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-destructive hover:bg-destructive/10"
               onClick={() => {
+                // Blur before the menu unmounts so Radix's focus restore after the
+                // confirm dialog closes cannot land back on this card's trigger.
+                blurActiveElement();
                 setShowMenu(false);
                 setMenuPos(null);
                 onDelete(group);

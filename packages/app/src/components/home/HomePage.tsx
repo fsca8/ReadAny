@@ -4,8 +4,19 @@
 import { DesktopImportActions } from "@/components/home/DesktopImportActions";
 import { GroupPickerPopover } from "@/components/home/GroupPickerPopover";
 import { SyncButton } from "@/components/ui/SyncButton";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { triggerVectorizeBook } from "@/lib/rag/vectorize-trigger";
+import { blurActiveElement } from "@/lib/ui/blur-active-element";
+import { useAppStore } from "@/stores/app-store";
 import { useLibraryStore } from "@/stores/library-store";
+import { useReaderStore } from "@/stores/reader-store";
 import type { Book, BookGroup, SortField } from "@readany/core/types";
 import {
   ArrowDownAZ,
@@ -76,12 +87,16 @@ export function HomePage() {
     removeGroup,
     moveBooksToGroup,
   } = useLibraryStore();
+  const closeAppTab = useAppStore((s) => s.removeTab);
+  const closeReaderTab = useReaderStore((s) => s.removeTab);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedBookIds, setSelectedBookIds] = useState<Set<string>>(new Set());
   const [showBatchTagMenu, setShowBatchTagMenu] = useState(false);
   const [batchNewTagInput, setBatchNewTagInput] = useState("");
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [showBatchGroupPicker, setShowBatchGroupPicker] = useState(false);
+  const [showDeleteSelectedDialog, setShowDeleteSelectedDialog] = useState(false);
+  const [pendingDeleteGroup, setPendingDeleteGroup] = useState<BookGroup | null>(null);
   const [showGroupMenu, setShowGroupMenu] = useState(false);
   const [detailsBookId, setDetailsBookId] = useState<string | null>(null);
   const sortBtnRef = useRef<HTMLButtonElement>(null);
@@ -281,12 +296,11 @@ export function HomePage() {
     [filter, setFilter],
   );
 
-  const handleDeleteGroup = useCallback(
-    async (group: BookGroup) => {
-      await removeGroup(group.id);
-    },
-    [removeGroup],
-  );
+  const handleDeleteGroupConfirmed = useCallback(async () => {
+    const group = pendingDeleteGroup;
+    setPendingDeleteGroup(null);
+    if (group) await removeGroup(group.id);
+  }, [pendingDeleteGroup, removeGroup]);
 
   const toggleBookSelection = useCallback((bookId: string) => {
     setSelectedBookIds((prev) => {
@@ -339,17 +353,25 @@ export function HomePage() {
     }
   }, [visibleBooks, isAllSelected]);
 
-  const handleBatchDelete = useCallback(async () => {
+  const handleBatchDeleteConfirmed = useCallback(async () => {
     if (selectedBookIds.size === 0) return;
-    if (
-      !confirm(t("library.batchDeleteConfirm", `确定要删除选中的 ${selectedBookIds.size} 本书吗？`))
-    )
-      return;
+    // Detach focus before closing so Radix does not restore it to the batch-delete
+    // button, and close any reader tabs for the books being removed.
+    blurActiveElement();
+    setShowDeleteSelectedDialog(false);
     for (const id of selectedBookIds) {
+      const matchingTabIds = useAppStore
+        .getState()
+        .tabs.filter((tab) => tab.bookId === id)
+        .map((tab) => tab.id);
+      for (const tabId of matchingTabIds) {
+        closeAppTab(tabId);
+        closeReaderTab(tabId);
+      }
       await removeBook(id);
     }
     exitSelectionMode();
-  }, [selectedBookIds, removeBook, exitSelectionMode, t]);
+  }, [selectedBookIds, removeBook, exitSelectionMode, closeAppTab, closeReaderTab]);
 
   const handleBatchVectorize = useCallback(async () => {
     if (selectedBookIds.size === 0) return;
@@ -507,7 +529,7 @@ export function HomePage() {
                 type="button"
                 className="rounded-lg p-2 text-destructive hover:bg-destructive/10"
                 title={t("common.delete", "删除")}
-                onClick={handleBatchDelete}
+                onClick={() => setShowDeleteSelectedDialog(true)}
               >
                 <Trash2 className="size-4" />
               </button>
@@ -557,7 +579,7 @@ export function HomePage() {
                           className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs text-destructive hover:bg-destructive/10"
                           onClick={() => {
                             setShowGroupMenu(false);
-                            handleDeleteGroup(activeGroup);
+                            setPendingDeleteGroup(activeGroup);
                           }}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
@@ -694,7 +716,7 @@ export function HomePage() {
                   books={item.books}
                   onOpen={setActiveGroupId}
                   renameGroup={renameGroup}
-                  onDelete={handleDeleteGroup}
+                  onDelete={setPendingDeleteGroup}
                 />
               ) : (
                 <BookCard
@@ -735,6 +757,81 @@ export function HomePage() {
           if (!open) setDetailsBookId(null);
         }}
       />
+
+      {/* Batch delete confirmation */}
+      <Dialog open={showDeleteSelectedDialog} onOpenChange={setShowDeleteSelectedDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("library.deleteBookTitle", "删除这本书？")}</DialogTitle>
+            <DialogDescription>
+              {t("library.batchDeleteConfirm", {
+                count: selectedBookIds.size,
+                defaultValue: `确定要删除选中的 ${selectedBookIds.size} 本书吗？`,
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+              onClick={() => {
+                blurActiveElement();
+                setShowDeleteSelectedDialog(false);
+              }}
+            >
+              {t("common.cancel", "取消")}
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center rounded-md bg-destructive px-4 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90"
+              onClick={handleBatchDeleteConfirmed}
+            >
+              {t("common.remove", "删除")}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Group delete confirmation */}
+      <Dialog
+        open={pendingDeleteGroup !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteGroup(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {t("library.deleteGroupTitle", { defaultValue: "删除这个分组？" })}
+            </DialogTitle>
+            <DialogDescription>
+              {t("library.deleteGroupDescription", {
+                name: pendingDeleteGroup?.name ?? "",
+                defaultValue: `将删除分组「${pendingDeleteGroup?.name ?? ""}」，组内书籍会保留在书架中。`,
+              })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+              onClick={() => {
+                blurActiveElement();
+                setPendingDeleteGroup(null);
+              }}
+            >
+              {t("common.cancel", "取消")}
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-9 items-center justify-center rounded-md bg-destructive px-4 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90"
+              onClick={handleDeleteGroupConfirmed}
+            >
+              {t("common.remove", "删除")}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

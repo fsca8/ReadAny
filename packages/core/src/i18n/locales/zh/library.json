@@ -74,6 +74,8 @@
     "preserveDeleteDataLabel": "保留笔记和阅读统计",
     "preserveDeleteDataHint": "重新导入同一本书时可恢复",
     "batchDeleteConfirm": "确定要删除选中的 {{count}} 本书吗？",
+    "deleteGroupTitle": "删除这个分组？",
+    "deleteGroupDescription": "将删除分组「{{name}}」，组内书籍会保留在书架中。",
     "changeGroup": "更换分组",
     "createGroup": "新建分组",
     "deleteTagConfirm": "确定删除标签 \"{{tag}}\" 吗？",

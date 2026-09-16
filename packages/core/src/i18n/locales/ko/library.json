@@ -74,6 +74,8 @@
     "preserveDeleteDataLabel": "노트와 독서 통계 보존",
     "preserveDeleteDataHint": "같은 책을 다시 가져오면 복원할 수 있어요",
     "batchDeleteConfirm": "선택한 {{count}}권을 삭제할까요?",
+    "deleteGroupTitle": "이 그룹을 삭제할까요?",
+    "deleteGroupDescription": "그룹 \"{{name}}\"이(가) 삭제됩니다. 그룹 안의 책은 라이브러리에 남습니다.",
     "changeGroup": "그룹 변경",
     "createGroup": "새 그룹",
     "deleteTagConfirm": "태그 \"{{tag}}\"을(를) 삭제할까요?",

@@ -74,6 +74,8 @@
     "preserveDeleteDataLabel": "保留筆記和閱讀統計",
     "preserveDeleteDataHint": "重新匯入同一本書時可恢復",
     "batchDeleteConfirm": "確定要刪除選中的 {{count}} 本書嗎？",
+    "deleteGroupTitle": "刪除這個分組？",
+    "deleteGroupDescription": "將刪除分組「{{name}}」，組內書籍會保留在書架中。",
     "changeGroup": "更換分組",
     "createGroup": "新建分組",
     "deleteTagConfirm": "確定刪除標籤 \"{{tag}}\" 嗎？",

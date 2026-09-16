@@ -74,6 +74,8 @@
     "preserveDeleteDataLabel": "ノートと読書統計を保持",
     "preserveDeleteDataHint": "同じ本を再インポートすると復元できます",
     "batchDeleteConfirm": "選択した{{count}}冊を削除しますか？",
+    "deleteGroupTitle": "このグループを削除しますか？",
+    "deleteGroupDescription": "グループ「{{name}}」を削除します。中の書籍はライブラリに残ります。",
     "changeGroup": "グループを変更",
     "createGroup": "新しいグループ",
     "deleteTagConfirm": "タグ「{{tag}}」を削除しますか？",

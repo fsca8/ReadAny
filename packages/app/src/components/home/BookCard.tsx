@@ -14,6 +14,7 @@ import { openDesktopBook } from "@/lib/library/open-book";
  * BookCard — Readest-inspired book card with realistic cover rendering
  */
 import { triggerVectorizeBook } from "@/lib/rag/vectorize-trigger";
+import { blurActiveElement } from "@/lib/ui/blur-active-element";
 import { useAppStore } from "@/stores/app-store";
 import { useDownloadProgressStore } from "@/stores/download-progress-store";
 import { useLibraryStore } from "@/stores/library-store";
@@ -99,25 +100,37 @@ export const BookCard = memo(function BookCard({
     setImageLoaded(false);
   }, [coverImageKey]);
 
+  const isSuppressed = useCallback(() => Date.now() < suppressOpenUntilRef.current, []);
+
   const handleOpen = async () => {
     if (isSelectionMode) {
       onSelect?.(book.id);
       return;
     }
-    if (
-      showMenu ||
-      showDeleteDialog ||
-      showReindexConfirm ||
-      Date.now() < suppressOpenUntilRef.current
-    ) {
+    if (showMenu || showDeleteDialog || showReindexConfirm || isSuppressed()) {
       return;
     }
     await openDesktopBook({ book, t });
   };
 
+  // The card root is clickable, so a programmatic focus restore (or Tab focus) would
+  // otherwise open the book. Never let focus alone open a book — only an explicit
+  // pointer click or the user's own Enter/Space on an already-focused card.
+  const handleCardFocus = useCallback(
+    (e: React.FocusEvent) => {
+      if (e.currentTarget.matches(":focus-visible")) return;
+      if (isSuppressed()) blurActiveElement();
+    },
+    [isSuppressed],
+  );
+
   const handleDelete = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     suppressOpenUntilRef.current = Date.now() + 600;
+    // Close the menu and blur its button before opening the dialog: if focus stays
+    // on the menu button while the menu unmounts, Radix's focus restore on dialog
+    // close lands back on the card and re-fires its click handler.
+    blurActiveElement();
     setShowMenu(false);
     setMenuPos(null);
     setPreserveDataOnDelete(true);
@@ -207,6 +220,7 @@ export const BookCard = memo(function BookCard({
     <div
       className="group relative flex h-full cursor-pointer flex-col"
       onClick={handleOpen}
+      onFocus={handleCardFocus}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
@@ -615,7 +629,12 @@ export const BookCard = memo(function BookCard({
             <button
               type="button"
               className="inline-flex h-9 items-center justify-center rounded-md border border-border bg-background px-4 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-              onClick={() => setShowDeleteDialog(false)}
+              onClick={() => {
+                // Detach the focus-restore target before closing, otherwise Radix
+                // restores focus to this card and the card's own click handler fires.
+                blurActiveElement();
+                setShowDeleteDialog(false);
+              }}
             >
               {t("common.cancel", "取消")}
             </button>
@@ -624,6 +643,7 @@ export const BookCard = memo(function BookCard({
               className="inline-flex h-9 items-center justify-center rounded-md bg-destructive px-4 text-sm font-medium text-destructive-foreground transition-colors hover:bg-destructive/90"
               onClick={async () => {
                 suppressOpenUntilRef.current = Date.now() + 600;
+                blurActiveElement();
                 setShowDeleteDialog(false);
                 // Close any open reader tabs BEFORE removing the book from store,
                 // otherwise ReaderView will briefly render an error page.

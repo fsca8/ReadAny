@@ -74,6 +74,8 @@
     "preserveDeleteDataLabel": "Conserver les notes et statistiques de lecture",
     "preserveDeleteDataHint": "Peut être restauré lors d'une réimportation du même livre",
     "batchDeleteConfirm": "Supprimer les {{count}} livre(s) sélectionné(s) ?",
+    "deleteGroupTitle": "Supprimer ce groupe ?",
+    "deleteGroupDescription": "Le groupe « {{name}} » sera supprimé. Ses livres resteront dans votre bibliothèque.",
     "changeGroup": "Changer de groupe",
     "createGroup": "Nouveau groupe",
     "deleteTagConfirm": "Supprimer le tag « {{tag}} » ?",
