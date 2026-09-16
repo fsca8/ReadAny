@@ -746,12 +746,17 @@ export function DesktopImportActions({ children, align = "end" }: DesktopImportA
 
   const [temporaryOpen, setTemporaryOpen] = useState(false);
   const [browserSource, setBrowserSource] = useState<WebDavImportSource | null>(null);
+  // Controlled open state: Radix only dismisses the menu when an item's onSelect
+  // is not prevented, and the import handlers below open native pickers / dialogs
+  // asynchronously. Closing explicitly keeps the menu from lingering on top of them.
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     void loadSyncConfig();
   }, [loadSyncConfig]);
 
   const handleLocalImport = useCallback(async () => {
+    setMenuOpen(false);
     try {
       const selected = await open({
         multiple: true,
@@ -774,6 +779,7 @@ export function DesktopImportActions({ children, align = "end" }: DesktopImportA
   }, [importBooks, t]);
 
   const handleOpenSavedWebDav = useCallback(async () => {
+    setMenuOpen(false);
     if (syncBackendType !== "webdav" || syncConfig?.type !== "webdav") {
       toast.error(
         t(
@@ -826,7 +832,7 @@ export function DesktopImportActions({ children, align = "end" }: DesktopImportA
 
   return (
     <>
-      <DropdownMenu>
+      <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>{children}</DropdownMenuTrigger>
         <DropdownMenuContent
           align={align}
@@ -835,8 +841,7 @@ export function DesktopImportActions({ children, align = "end" }: DesktopImportA
         >
           <DropdownMenuItem
             className="items-center gap-3 rounded-xl px-3 py-2.5"
-            onSelect={(event) => {
-              event.preventDefault();
+            onSelect={() => {
               void handleLocalImport();
             }}
           >
@@ -852,8 +857,7 @@ export function DesktopImportActions({ children, align = "end" }: DesktopImportA
 
           <DropdownMenuItem
             className="items-center gap-3 rounded-xl px-3 py-2.5"
-            onSelect={(event) => {
-              event.preventDefault();
+            onSelect={() => {
               void handleOpenSavedWebDav();
             }}
           >
@@ -869,8 +873,7 @@ export function DesktopImportActions({ children, align = "end" }: DesktopImportA
 
           <DropdownMenuItem
             className="items-center gap-3 rounded-xl px-3 py-2.5"
-            onSelect={(event) => {
-              event.preventDefault();
+            onSelect={() => {
               setTemporaryOpen(true);
             }}
           >
