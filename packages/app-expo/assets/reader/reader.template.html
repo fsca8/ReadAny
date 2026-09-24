@@ -277,6 +277,43 @@
       }, delay == null ? 100 : delay);
     }
 
+    /**
+     * Isolate the first section of a fixed-layout book as a standalone page.
+     *
+     * foliate-js maps sections onto spreads in #buildSpreads(). With
+     * rendition.spread = "auto" and no per-section pageSpread, page 1 and page 2
+     * land in the SAME spread (the first section defaults into the "right" slot,
+     * then page 2 fills the leftover "left" slot). The result is a two-pages-
+     * side-by-side spread, so the cover is laid out at half width — which is
+     * exactly what users see on page 1 of a PDF.
+     *
+     * Only `pageSpread = "center"` gives the page a spread of its own.
+     * "left"/"right" merely move which slot it occupies and still pair it with a
+     * neighbour, so they do NOT fix the half-width cover. Verified by running
+     * foliate-js #buildSpreads directly:
+     *   no marking      -> {"right":p0}                      (shared, half width)
+     *   "left"          -> {"left":p0, "right":p1}           (shared, half width)
+     *   "center"        -> {"center":p0}                     (isolated, full width)
+     *
+     * The first spine item is treated as a standalone page for every
+     * fixed-layout book: page 1 of a PDF/CBZ is the cover by convention, and its
+     * section id is a numeric index ("0"), so filename sniffing would always
+     * miss it. An EPUB that explicitly declares a spread is left untouched.
+     *
+     * Must run BEFORE view.open(), because #buildSpreads() is evaluated once
+     * inside open() -> renderer.open().
+     */
+    function markFixedLayoutCover() {
+      if (!view || !view.isFixedLayout) return;
+      const book = view.book;
+      const sections = book && book.sections;
+      if (!sections || !sections.length) return;
+      const first = sections[0];
+      if (!first || first.pageSpread) return;
+      first.pageSpread = 'center';
+    }
+
+
     function applyFixedLayoutRendererSettings(renderer, paginatedLayout) {
       if (!renderer) return;
       const layout = paginatedLayout === 'single' ? 'single' : 'double';
@@ -309,7 +346,17 @@
       if (!renderer || !view) return;
 
       if (view.isFixedLayout) {
+        // Fixed layout (PDF/CBZ) supports the same view-mode switch as
+        // reflowable books: `flow="scrolled"` puts foliate-fxl into continuous
+        // scroll mode, removing the attribute restores paginated flipping.
+        // Returning early here used to make the scroll toggle a no-op on
+        // mobile for every fixed-layout book.
         renderer.removeAttribute('no-continuous-scroll');
+        if (currentViewMode === 'scroll') {
+          renderer.setAttribute('flow', 'scrolled');
+        } else {
+          renderer.removeAttribute('flow');
+        }
         return;
       }
 
@@ -1693,6 +1740,10 @@
         container.appendChild(el);
         view = el;
         currentSectionUsesVerticalWriting = false;
+
+        // Must run before el.open(): foliate-js computes the spread layout from
+        // `pageSpread` exactly once, inside open() -> renderer.open().
+        markFixedLayoutCover(book);
 
         await el.open(book);
 
