@@ -284,29 +284,29 @@
      * rendition.spread = "auto" and no per-section pageSpread, page 1 and page 2
      * land in the SAME spread (the first section defaults into the "right" slot,
      * then page 2 fills the leftover "left" slot). The result is a two-pages-
-     * side-by-side spread, so the cover is laid out at half width — which is
-     * exactly what users see on page 1 of a PDF.
+     * side-by-side spread, so the cover is laid out at half width.
      *
      * Only `pageSpread = "center"` gives the page a spread of its own.
      * "left"/"right" merely move which slot it occupies and still pair it with a
-     * neighbour, so they do NOT fix the half-width cover. Verified by running
-     * foliate-js #buildSpreads directly:
+     * neighbour. Verified by running foliate-js #buildSpreads directly:
      *   no marking      -> {"right":p0}                      (shared, half width)
      *   "left"          -> {"left":p0, "right":p1}           (shared, half width)
      *   "center"        -> {"center":p0}                     (isolated, full width)
      *
+     * Takes the book explicitly and derives fixed-layout from its rendition:
+     * this must run BEFORE view.open(), and open() is what assigns
+     * view.book / view.isFixedLayout. Reading those here would always see
+     * undefined and silently skip the fix.
+     *
      * The first spine item is treated as a standalone page for every
      * fixed-layout book: page 1 of a PDF/CBZ is the cover by convention, and its
-     * section id is a numeric index ("0"), so filename sniffing would always
-     * miss it. An EPUB that explicitly declares a spread is left untouched.
-     *
-     * Must run BEFORE view.open(), because #buildSpreads() is evaluated once
-     * inside open() -> renderer.open().
+     * section id is a numeric index ("0"), so filename sniffing would miss it.
+     * An EPUB that explicitly declares a spread is left untouched.
      */
-    function markFixedLayoutCover() {
-      if (!view || !view.isFixedLayout) return;
-      const book = view.book;
-      const sections = book && book.sections;
+    function markFixedLayoutCover(book) {
+      if (!book) return;
+      if (book.rendition?.layout !== 'pre-paginated') return;
+      const sections = book.sections;
       if (!sections || !sections.length) return;
       const first = sections[0];
       if (!first || first.pageSpread) return;
@@ -1868,6 +1868,14 @@
         if (view.isFixedLayout) {
           applyFixedLayoutRendererSettings(renderer, currentPaginatedLayout);
         }
+        // Apply the view mode before returning. This early return used to skip
+        // the shared `if (settings.viewMode)` block further down, so for PDFs
+        // the scroll/paginated toggle never reached the renderer at all — the
+        // setting appeared to do nothing.
+        if (settings.viewMode) {
+          currentViewMode = settings.viewMode;
+        }
+        applyRendererFlowMode(renderer);
         return;
       }
 
