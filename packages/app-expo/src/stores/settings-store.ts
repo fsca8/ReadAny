@@ -8,6 +8,7 @@ import {
   buildProviderModelsUrl,
   providerRequiresApiKey,
   providerSupportsExactRequestUrl,
+  mergeModelLists,
 } from "@readany/core/utils/api";
 import { create } from "zustand";
 import { deleteSecure, loadSecure, saveSecure, withPersist } from "./persist";
@@ -603,7 +604,16 @@ export const useSettingsStore = create<SettingsState>()(
               ...s.aiConfig,
               endpoints: s.aiConfig.endpoints.map((ep) =>
                 ep.id === endpointId
-                  ? { ...ep, models, modelsFetched: true, modelsFetching: false }
+                  ? {
+                      ...ep,
+                      // Merge rather than replace: a provider's /models endpoint
+                      // omits models that still work (Zhipu does not list the
+                      // flash variants), so replacing would silently delete
+                      // anything the user added by hand.
+                      models: mergeModelLists(ep.models, models),
+                      modelsFetched: true,
+                      modelsFetching: false,
+                    }
                   : ep,
               ),
             },

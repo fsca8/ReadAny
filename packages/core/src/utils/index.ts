@@ -42,6 +42,7 @@ export {
   getDefaultBaseUrl,
   detectProviderFromUrl,
   providerRequiresApiKey,
+  mergeModelLists,
   PROVIDER_CONFIGS,
 } from "./api";
 export type {

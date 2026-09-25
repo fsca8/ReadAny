@@ -7,6 +7,7 @@ import {
   formatApiHost,
   getDefaultBaseUrl,
   isOllamaEmbeddingEndpointUrl,
+  mergeModelLists,
   normalizeEmbeddingEndpointUrl,
   providerSupportsExactRequestUrl,
   resolveProviderBaseUrl,
@@ -211,5 +212,39 @@ describe("AI API URL helpers", () => {
         status: 404,
       });
     });
+  });
+});
+
+describe("mergeModelLists", () => {
+  it("keeps a manually added model that the provider does not advertise", () => {
+    // The Zhipu case: /models omits the flash variants, but they are callable.
+    const merged = mergeModelLists(
+      ["glm-4.7-flash"],
+      ["glm-4.7", "glm-4.6"],
+    );
+    expect(merged).toContain("glm-4.7-flash");
+    expect(merged).toEqual(["glm-4.7-flash", "glm-4.7", "glm-4.6"]);
+  });
+
+  it("appends newly advertised models after the existing ones", () => {
+    expect(mergeModelLists(["a"], ["b"])).toEqual(["a", "b"]);
+  });
+
+  it("de-duplicates across both lists, preserving first-seen order", () => {
+    expect(mergeModelLists(["a", "b"], ["b", "c", "a"])).toEqual(["a", "b", "c"]);
+  });
+
+  it("trims whitespace and drops blank entries", () => {
+    expect(mergeModelLists(["  a  ", "", "   "], ["b "])).toEqual(["a", "b"]);
+  });
+
+  it("tolerates missing lists", () => {
+    expect(mergeModelLists([], [])).toEqual([]);
+    expect(
+      mergeModelLists(undefined as unknown as string[], ["x"]),
+    ).toEqual(["x"]);
+    expect(
+      mergeModelLists(["x"], undefined as unknown as string[]),
+    ).toEqual(["x"]);
   });
 });

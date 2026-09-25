@@ -573,3 +573,25 @@ export function detectProviderFromUrl(url: string): string {
 export function providerRequiresApiKey(providerId: string): boolean {
   return !OPTIONAL_API_KEY_PROVIDERS.has(providerId);
 }
+
+/**
+ * Union of the model names an endpoint already knows and a freshly fetched list.
+ *
+ * A provider's /models endpoint describes what it advertises, not what it
+ * accepts — Zhipu's OpenAI-compatible endpoint omits the flash variants
+ * (`glm-4.7-flash` and friends) even though they are callable. Overwriting the
+ * stored list with the fetched one therefore deletes models the user added by
+ * hand, which is the only way to use such models at all. Merge instead: keep
+ * what we had, append anything new, drop blanks and duplicates.
+ */
+export function mergeModelLists(existing: string[], fetched: string[]): string[] {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const name of [...(existing ?? []), ...(fetched ?? [])]) {
+    const trimmed = typeof name === "string" ? name.trim() : "";
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    merged.push(trimmed);
+  }
+  return merged;
+}

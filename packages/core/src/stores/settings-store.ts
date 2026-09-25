@@ -5,6 +5,7 @@ import {
   buildProviderModelsUrl,
   providerSupportsExactRequestUrl,
   providerRequiresApiKey,
+  mergeModelLists,
 } from "../utils";
 import { logAIEndpointDebug, summarizeDebugText } from "../ai/request-debug";
 import { getEndpointFetch } from "../ai/llm-provider";
@@ -466,7 +467,16 @@ export const useSettingsStore = create<SettingsState>()(
             ...s.aiConfig,
             endpoints: s.aiConfig.endpoints.map((ep) =>
               ep.id === endpointId
-                ? { ...ep, models, modelsFetched: true, modelsFetching: false }
+                ? {
+                    ...ep,
+                    // Merge rather than replace: a provider's /models endpoint
+                    // legitimately omits models that still work (Zhipu, for
+                    // instance, does not list the flash variants). Replacing
+                    // would silently delete anything the user added by hand.
+                    models: mergeModelLists(ep.models, models),
+                    modelsFetched: true,
+                    modelsFetching: false,
+                  }
                 : ep,
             ),
           },
