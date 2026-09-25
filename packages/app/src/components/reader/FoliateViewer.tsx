@@ -3380,10 +3380,13 @@ function applyRendererSettings(
   if (isFixedLayout) {
     const isSinglePage = (settings.paginatedLayout ?? "double") === "single";
     const spreadMode = isSinglePage ? "none" : "auto";
-    // Fixed layout: single-page mode should scale to the page width so image-only
-    // EPUBs do not look "shrunk inside a spread". Double-page mode still uses
-    // fit-page to keep both pages fully visible inside the viewport.
-    renderer.setAttribute("zoom", isSinglePage ? "fit-width" : "fit-page");
+    // Fixed layout：两种模式都用 fit-page（= min(容器宽/页宽, 容器高/页高)，永不裁切）。
+    // 这里曾经单页用 fit-width，本意是「图片版 EPUB 别被缩在两页跨页里显得小」；但 fit-width
+    // 的语义是「按宽度铺满」：横屏窗口里竖版 PDF 页必然超高 → 页被裁掉，必须上下滚动才能看全，
+    // 而滚动到边界又会被越界翻页（scrollFixedLayoutPage 返回 false → handleWheel → next/prev），
+    // 观感很差。而 fit-page 在「页比视口相对更宽」时会自动等于 fit-width（照样铺满宽度），
+    // 所以原来那条「显得小」的顾虑在单页模式下并不成立。
+    renderer.setAttribute("zoom", "fit-page");
     renderer.setAttribute("zoom-factor", String(settings.fixedLayoutZoom ?? 1));
     if (view.book?.rendition) {
       view.book.rendition.spread = spreadMode;

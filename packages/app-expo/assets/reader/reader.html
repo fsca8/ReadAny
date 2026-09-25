@@ -318,7 +318,11 @@
       if (!renderer) return;
       const layout = paginatedLayout === 'single' ? 'single' : 'double';
       const spreadMode = layout === 'single' ? 'none' : 'auto';
-      const zoomMode = layout === 'single' ? 'fit-width' : 'fit-page';
+      // 与桌面端口径一致（FoliateViewer 的 applyFixedLayoutSettings）：单页也用 fit-page。
+      // fit-width 是「按宽度铺满」——横屏/宽容器里竖版页会超出可视区被裁掉（必须滚动才能看全，
+      // 滚到边界还会触发越界翻页）；fit-page = min(宽比, 高比) 永不裁切，页相对更宽时自动
+      // 等于 fit-width（照样铺满宽度）。
+      const zoomMode = 'fit-page';
 
       renderer.setAttribute('spread', spreadMode);
       renderer.setAttribute('zoom', zoomMode);
