@@ -6,7 +6,7 @@ import i18n from "i18next";
  */
 import type { AIConfig, Book, SemanticContext, Skill, Thread } from "../types";
 import { streamReadingAgent } from "./agents/reading-agent";
-import { buildSessionKey, isSessionProxyConfig } from "./llm-provider";
+import { buildChatSessionKey, isSessionProxyConfig } from "./llm-provider";
 import { processMessages } from "./message-pipeline";
 import { getToolResultError } from "./tool-result";
 import type { ToolDefinition } from "./tools/tool-types";
@@ -108,19 +108,24 @@ export class StreamingChat {
         error?: string;
       }> = [];
 
+      const effectiveBookId = options.book?.id || options.bookId || options.thread.bookId || null;
+
       const stream = streamReadingAgent(
         {
           aiConfig: options.aiConfig,
           book: options.book,
-          bookId: options.book?.id || options.bookId || options.thread.bookId || null,
+          bookId: effectiveBookId,
           semanticContext: options.semanticContext,
           enabledSkills: options.enabledSkills,
           isVectorized: options.isVectorized,
           deepThinking: options.deepThinking,
           spoilerFree: options.spoilerFree,
           memorySummary: options.thread.memorySummary,
-          // 会话标识：用 ReadAny 自己的聊天窗口 id —— 只有客户端知道用户此刻要恢复哪个窗口
-          sessionKey: isSessionProxy ? buildSessionKey("thread", options.thread.id) : undefined,
+          // 会话标识：**按书** —— 同一本书（换窗口、隔天再问）复用同一条上游会话；
+          // 没有书（通用对话）才退回按窗口 id。见 buildChatSessionKey 注释。
+          sessionKey: isSessionProxy
+            ? buildChatSessionKey(effectiveBookId, options.thread.id)
+            : undefined,
           getAvailableTools: options.getAvailableTools,
           signal,
         },

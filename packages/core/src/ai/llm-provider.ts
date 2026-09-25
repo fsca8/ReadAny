@@ -568,13 +568,26 @@ export function isSessionProxyConfig(config: AIConfig): boolean {
 
 /**
  * 构造发给会话代理的会话标识（client_key）。
- * 必须用「客户端自己的窗口 id」——只有客户端知道用户此刻要恢复哪个窗口。
- *   thread → readany:thread:<threadId>   一个聊天窗口 = 一条上游会话
- *   memory → readany:memory:<threadId>   记忆压缩专用，避免和对话内容混在一条上游会话里
- *   skill  → readany:skill:<name>        技能执行专用
+ * 必须用「客户端自己的稳定 id」——只有客户端知道用户此刻要恢复哪条会话。
+ *   book   → readany:book:<bookId>     一本书 = 一条上游会话（同一本书换窗口、隔天再问都复用）
+ *   thread → readany:thread:<threadId> 一个聊天窗口 = 一条上游会话（没有书时的退回）
+ *   memory → readany:memory:<threadId> 记忆压缩专用，避免和对话内容混在一条上游会话里
+ *   skill  → readany:skill:<name>      技能执行专用
  */
-export function buildSessionKey(kind: "thread" | "memory" | "skill", id: string): string {
+export function buildSessionKey(kind: "book" | "thread" | "memory" | "skill", id: string): string {
   return `readany:${kind}:${id}`;
+}
+
+/**
+ * 对话用的会话标识：**按书**（同一本书的提问相关性高，共享上游上下文更自然，
+ * 也符合「今天问、明天问、换个窗口问，都还是这本书」的用法）；
+ * 没有书（通用对话）时才退回按窗口。
+ */
+export function buildChatSessionKey(
+  bookId: string | null | undefined,
+  threadId: string,
+): string {
+  return bookId ? buildSessionKey("book", bookId) : buildSessionKey("thread", threadId);
 }
 
 export function resolveActiveEndpoint(config: AIConfig): {

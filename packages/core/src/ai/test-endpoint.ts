@@ -60,7 +60,7 @@ function normalizeGoogleModel(model: string): string {
  *
  * 为什么不像其它 provider 那样发一轮 completion：
  *  1) 它的 /v1/* 要求带会话标识（缺了刻意返回 400），而「测试连接」没有任何会话锚点，
- *     只有真实聊天窗口才有（ReadAny 用 readany:thread:<threadId>）；
+ *     只有真实聊天才有（ReadAny 用 readany:book:<bookId>，没有书时 readany:thread:<threadId>）；
  *  2) 探活不该真的在上游建一条会话（还占同会话的最小间隔限流）。
  * 能拉到模型列表就等于证明：服务在跑 / API key 有效 / 路径正确 —— 与「拉取模型」同一件事。
  */

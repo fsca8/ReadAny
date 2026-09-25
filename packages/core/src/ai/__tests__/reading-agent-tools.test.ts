@@ -21,6 +21,8 @@ vi.mock("../llm-provider", () => ({
   isSessionProxyEndpoint: vi.fn(() => false),
   AICHATASCHAT_PROVIDER: "aichataschat",
   buildSessionKey: (kind: string, id: string) => `readany:${kind}:${id}`,
+  buildChatSessionKey: (bookId: string | null | undefined, threadId: string) =>
+    bookId ? `readany:book:${bookId}` : `readany:thread:${threadId}`,
 }));
 
 const getReadingContextSnapshotMock = vi.hoisted(() => vi.fn(() => null));

@@ -2,6 +2,7 @@ export type { ToolDefinition, ToolParameter } from "./tools";
 
 export {
   AICHATASCHAT_PROVIDER,
+  buildChatSessionKey,
   buildSessionKey,
   createChatModel,
   createChatModelFromEndpoint,
