@@ -15,6 +15,10 @@ vi.mock("../llm-provider", () => ({
   createChatModel: vi.fn(async () => ({
     stream: vi.fn(),
   })),
+  // The mock is a full replacement, so every symbol the subject imports must be
+  // present. reading-agent.ts imports isSessionProxyConfig; without it the
+  // module fails to resolve at call time ("No export is defined on the mock").
+  isSessionProxyConfig: vi.fn(() => false),
 }));
 
 const getReadingContextSnapshotMock = vi.hoisted(() => vi.fn(() => null));
