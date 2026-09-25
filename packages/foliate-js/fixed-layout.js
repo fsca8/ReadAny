@@ -143,6 +143,14 @@ export class FixedLayout extends HTMLElement {
   #preloadCache = new Map();
   #spreadAccessTime = new Map();
   #maxCachedSpreads = 3;
+  // Page-turn generation counter. goToSpread() bumps it on entry; every async
+  // step that follows compares its captured value and bails out when a newer
+  // turn has started. Without it, a slow page (scanned PDFs decode a full-page
+  // image per section) could finish *after* the user turned the page: its frame
+  // was appended to #root and registered in #prerenderedSpreads too late to be
+  // covered by the "hide every frame that is not the current spread" sweep, so
+  // it stayed visible forever — the reported "left half is always the cover".
+  #showGen = 0;
   // Scroll mode state
   #scrollMode = false;
   #scrollPages = [];
@@ -214,6 +222,7 @@ export class FixedLayout extends HTMLElement {
         if (value === "scrolled" && !this.#scrollMode) {
           // Capture the index from paginated mode BEFORE flipping the flag.
           const savedIndex = this.index;
+          this.#showGen++; // 作废在途的那次翻页，别让它往滚动 DOM 里画帧
           this.#scrollMode = true;
           if (this.book) this.#initScrollMode(savedIndex);
         } else if (value !== "scrolled" && this.#scrollMode) {
@@ -430,7 +439,12 @@ export class FixedLayout extends HTMLElement {
 
     return renderPromises;
   }
-  async #showSpread({ left, right, center, side, spreadIndex }) {
+  async #showSpread({ left, right, center, side, spreadIndex, gen }) {
+    // 代次守卫（见 #showGen 注释）：若期间用户又翻了一页，这次就作废 —
+    // 不动 #left/#right/#center，也不做显示清扫，避免旧帧被点亮后无人回收。
+    const isStale = () => gen !== undefined && gen !== this.#showGen;
+    if (isStale()) return;
+
     this.#left = null;
     this.#right = null;
     this.#center = null;
@@ -459,14 +473,28 @@ export class FixedLayout extends HTMLElement {
         this.#root.append(this.#right.element);
       }
     } else if (center) {
-      this.#center = await this.#createFrame(center);
+      const frame = await this.#createFrame(center);
+      if (isStale()) {
+        // 过期帧：元素已经 append 进 #root，必须自己清掉，否则它会永远停在
+        // 左侧（DOM 顺序在其它帧之前）—— 就是「左半页固定是封面」那个现象。
+        frame.element?.remove();
+        return;
+      }
+      this.#center = frame;
       if (cacheKey) {
         this.#prerenderedSpreads.set(cacheKey, { center: this.#center });
         this.#spreadAccessTime.set(cacheKey, Date.now());
       }
     } else {
-      this.#left = await this.#createFrame(left);
-      this.#right = await this.#createFrame(right);
+      const leftFrame = await this.#createFrame(left);
+      const rightFrame = await this.#createFrame(right);
+      if (isStale()) {
+        leftFrame.element?.remove();
+        rightFrame.element?.remove();
+        return;
+      }
+      this.#left = leftFrame;
+      this.#right = rightFrame;
       if (cacheKey) {
         this.#prerenderedSpreads.set(cacheKey, { left: this.#left, right: this.#right });
         this.#spreadAccessTime.set(cacheKey, Date.now());
@@ -550,6 +578,7 @@ export class FixedLayout extends HTMLElement {
     }
   }
   #clearPrerendered() {
+    this.#showGen++; // 帧要全部销毁，在途的那次翻页作废
     for (const frames of this.#prerenderedSpreads.values()) {
       for (const frame of [frames.center, frames.left, frames.right]) {
         frame?.element?.remove();
@@ -1062,23 +1091,34 @@ export class FixedLayout extends HTMLElement {
       return;
     }
     this.#index = index;
+    // 代次守卫：从这一次翻页开始，旧的那次一律作废（见 #showGen 注释）
+    const gen = ++this.#showGen;
     const spread = this.#spreads[index];
     if (spread.center) {
       const sectionIndex = this.book.sections.indexOf(spread.center);
       const src = await spread.center?.load?.();
-      await this.#showSpread({ center: { index: sectionIndex, src }, spreadIndex: index, side });
+      if (gen !== this.#showGen) return;
+      await this.#showSpread({
+        center: { index: sectionIndex, src },
+        spreadIndex: index,
+        side,
+        gen,
+      });
     } else {
       const indexL = this.book.sections.indexOf(spread.left);
       const indexR = this.book.sections.indexOf(spread.right);
       const srcL = await spread.left?.load?.();
       const srcR = await spread.right?.load?.();
+      if (gen !== this.#showGen) return;
       await this.#showSpread({
         left: { index: indexL, src: srcL },
         right: { index: indexR, src: srcR },
         spreadIndex: index,
         side,
+        gen,
       });
     }
+    if (gen !== this.#showGen) return;
     this.#reportLocation(reason);
   }
   async select(target) {
