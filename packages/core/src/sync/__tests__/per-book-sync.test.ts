@@ -264,6 +264,10 @@ class FakeBackend implements ISyncBackend {
   readonly type = "webdav" as const;
   files = new Map<string, unknown>();
   listedDirs: string[] = [];
+  /** Per-path lastModified returned by listDir (defaults to 0 = unknown). */
+  lastModifiedByPath = new Map<string, number>();
+  /** Every path passed to getJSON, in order — used to assert read counts. */
+  jsonReads: string[] = [];
 
   constructor(initial?: Record<string, unknown>) {
     if (initial) for (const [path, value] of Object.entries(initial)) this.files.set(path, value);
@@ -282,11 +286,12 @@ class FakeBackend implements ISyncBackend {
         name: filePath.slice(path.length + 1),
         path: filePath,
         size: 0,
-        lastModified: 0,
+        lastModified: this.lastModifiedByPath.get(filePath) ?? 0,
         isDirectory: false,
       }));
   }
   async getJSON<T>(path: string): Promise<T | null> {
+    this.jsonReads.push(path);
     return (this.files.get(path) as T) ?? null;
   }
   async putJSON(path: string, data: unknown): Promise<void> {
@@ -487,5 +492,84 @@ describe("runPerBookSync (per-book cloud engine)", () => {
     expect(db.table("messages").get("msg-1")?.content).toBe("hello");
     expect(db.table("messages").get("msg-2")?.content).toBe("later");
     expect(db.syncMetadata.get("perbook:chat-pulled-day")).toBe("2026-09-05");
+  });
+
+  it("skips a day under the cursor without reading its body when lastModified is not newer", async () => {
+    const backend = new FakeBackend({
+      "/readany/sync/index.json": { schemaVersion: 2, updatedAt: T2, books: {}, threads: {} },
+      "/readany/sync/chat/2026-08-01.json": {
+        schemaVersion: 1,
+        date: "2026-08-01",
+        messages: [{ id: "msg-old", thread_id: "th-1", content: "old", created_at: T1 }],
+        updatedAt: T1,
+      },
+    });
+    // Already applied this day at version T1, and the remote file is no newer.
+    backend.lastModifiedByPath.set("/readany/sync/chat/2026-08-01.json", T1);
+    await db.execute("INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)", [
+      "perbook:chat-pulled-day",
+      "2026-08-31",
+    ]);
+    await db.execute("INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)", [
+      "perbook:chat-merged-days",
+      JSON.stringify({ "2026-08-01": T1 }),
+    ]);
+
+    await runPerBookSync(backend);
+
+    // The body must never be fetched: that is the whole point of the filter.
+    expect(backend.jsonReads).not.toContain("/readany/sync/chat/2026-08-01.json");
+    expect(db.table("messages").get("msg-old")).toBeUndefined();
+  });
+
+  it("still pulls a day under the cursor when the file changed since we applied it", async () => {
+    const backend = new FakeBackend({
+      "/readany/sync/index.json": { schemaVersion: 2, updatedAt: T3, books: {}, threads: {} },
+      "/readany/sync/chat/2026-08-01.json": {
+        schemaVersion: 1,
+        date: "2026-08-01",
+        // Late-arriving offline message appended to an already-pulled day.
+        messages: [
+          { id: "msg-old", thread_id: "th-1", content: "old", created_at: T1 },
+          { id: "msg-late", thread_id: "th-1", content: "late", created_at: T2 },
+        ],
+        updatedAt: T3,
+      },
+    });
+    backend.lastModifiedByPath.set("/readany/sync/chat/2026-08-01.json", T3);
+    await db.execute("INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)", [
+      "perbook:chat-pulled-day",
+      "2026-08-31",
+    ]);
+    await db.execute("INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)", [
+      "perbook:chat-merged-days",
+      JSON.stringify({ "2026-08-01": T1 }),
+    ]);
+
+    await runPerBookSync(backend);
+
+    expect(db.table("messages").get("msg-late")?.content).toBe("late");
+    expect(db.syncMetadata.get("perbook:chat-merged-days")).toContain(`"2026-08-01":${T3}`);
+  });
+
+  it("reads a day body at most once per sync (no double fetch)", async () => {
+    const backend = new FakeBackend({
+      "/readany/sync/index.json": { schemaVersion: 2, updatedAt: T2, books: {}, threads: {} },
+      "/readany/sync/chat/2026-09-05.json": {
+        schemaVersion: 1,
+        date: "2026-09-05",
+        messages: [{ id: "msg-2", thread_id: "th-1", content: "later", created_at: T2 }],
+        updatedAt: T2,
+      },
+    });
+    await db.execute("INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)", [
+      "perbook:chat-pulled-day",
+      "2026-08-31",
+    ]);
+
+    await runPerBookSync(backend);
+
+    const reads = backend.jsonReads.filter((p) => p === "/readany/sync/chat/2026-09-05.json");
+    expect(reads).toHaveLength(1);
   });
 });

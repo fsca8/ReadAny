@@ -740,27 +740,35 @@ export async function runPerBookSync(
         : {};
 
       // Pull: every remote day file that is past our cursor, or whose file
-      // version changed under the cursor (offline devices write old days).
+      // changed under the cursor (offline devices write old days).
       const dayEntries = await backend
         .listDir(CHAT_DIR)
         .catch(() => [] as RemoteFile[]);
       const dayFiles = dayEntries
         .filter((e) => !e.isDirectory && /^\d{4}-\d{2}-\d{2}\.json$/.test(e.name))
-        .map((e) => e.name.replace(/\.json$/, ""))
-        .sort();
+        .map((e) => ({ day: e.name.replace(/\.json$/, ""), lastModified: e.lastModified }))
+        .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
 
-      for (const day of dayFiles) {
-        const version = (await backend.getJSON<ChatDayFile>(`${CHAT_DIR}/${day}.json`))
-          ?.updatedAt;
+      for (const { day, lastModified } of dayFiles) {
         const pastCursor = day > pulledDay;
-        const changedUnderCursor =
-          !pastCursor &&
-          version !== undefined &&
-          version > (mergedDayVersions[day] ?? 0);
-        if (!pastCursor && !changedUnderCursor) continue;
+        // Cheap up-front filter for the days under our cursor: the PROPFIND
+        // listing already carries lastModified, so most unchanged days can be
+        // skipped without downloading the file at all.
+        //
+        // lastModified is only a hint — it has second granularity and comes
+        // from the server clock — so it can produce a false negative when a
+        // write lands in the same second as the recorded version. The
+        // authoritative check is the payload's own `updatedAt`, which is read
+        // below from the body we already fetched. A day skipped here is one
+        // whose modified time is not newer than the version we applied, which
+        // is the same conclusion the payload check would reach.
+        const mergedVersion = mergedDayVersions[day] ?? 0;
+        if (!pastCursor && lastModified > 0 && lastModified <= mergedVersion) continue;
 
         const file = await backend.getJSON<ChatDayFile>(`${CHAT_DIR}/${day}.json`);
         if (!file || file.schemaVersion !== 1) continue;
+        // Now that the body is in hand, confirm against the real version.
+        if (!pastCursor && !(file.updatedAt > mergedVersion)) continue;
         await withDatabaseLockRetry(
           async () => {
             await ensureNoTransaction();
