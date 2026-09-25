@@ -6,7 +6,7 @@ module.exports = {
   expo: {
     name: variant.name,
     slug: "readany",
-    version: "1.3.6",
+    version: "1.4.0",
     orientation: "portrait",
     icon: "./assets/icon.png",
     userInterfaceStyle: "automatic",
@@ -36,6 +36,10 @@ module.exports = {
       },
       softwareKeyboardLayoutMode: "resize",
       package: variant.androidPackage,
+      // 本地（gradlew）构建用的 versionCode：prebuild 会把它写进 android/app/build.gradle，
+      // 由 scripts/bump-version.js 在升版本时自增（保证单调递增，覆盖安装不会报降级）。
+      // 注意：EAS 云构建走 appVersionSource=remote，会忽略本地值、由 EAS 分配。
+      versionCode: 2,
       permissions: [
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",

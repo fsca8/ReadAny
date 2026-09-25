@@ -93,6 +93,32 @@ function readVersions() {
   });
 }
 
+// ── Android versionCode（本地 gradlew 构建用）──────────────────────────────
+// prebuild 会把它写进 android/app/build.gradle；这里统一管理，保证升版本时单调递增。
+// 桌面端与 EAS 云构建（appVersionSource=remote）不用这个值。
+const APP_CONFIG_PATH = "packages/app-expo/app.config.js";
+const VERSION_CODE_RE = /^(\s*versionCode:\s*)(\d+)(\s*,\s*)$/m;
+
+function readAppVersionCode() {
+  const content = fs.readFileSync(path.join(ROOT, APP_CONFIG_PATH), "utf8");
+  const match = content.match(VERSION_CODE_RE);
+  if (!match) {
+    throw new Error(`Could not find android.versionCode in ${APP_CONFIG_PATH}`);
+  }
+  return Number(match[2]);
+}
+
+function bumpAppVersionCode() {
+  const fullPath = path.join(ROOT, APP_CONFIG_PATH);
+  const content = fs.readFileSync(fullPath, "utf8");
+  if (!VERSION_CODE_RE.test(content)) {
+    throw new Error(`Could not find android.versionCode in ${APP_CONFIG_PATH}`);
+  }
+  const next = readAppVersionCode() + 1;
+  fs.writeFileSync(fullPath, content.replace(VERSION_CODE_RE, `$1${next}$3`), "utf8");
+  return next;
+}
+
 function checkConsistency() {
   const versions = readVersions();
   const unique = [...new Set(versions.map((v) => v.version))];
@@ -101,6 +127,7 @@ function checkConsistency() {
   for (const v of versions) {
     console.log(`  ${v.file}: ${v.version}`);
   }
+  console.log(`  ${APP_CONFIG_PATH} android.versionCode: ${readAppVersionCode()}`);
 
   if (unique.length !== 1) {
     console.error("\nERROR: Version mismatch detected!");
@@ -124,6 +151,10 @@ function setVersion(newVersion) {
     fs.writeFileSync(fullPath, updated, "utf8");
     console.log(`  Updated ${f.path} -> ${newVersion}`);
   }
+
+  // 本地 Android 包的 versionCode 同步自增（EAS 云构建不用它）
+  const nextCode = bumpAppVersionCode();
+  console.log(`  Updated ${APP_CONFIG_PATH} android.versionCode -> ${nextCode}`);
 
   console.log(`\nVersion bumped to ${newVersion}`);
 }
