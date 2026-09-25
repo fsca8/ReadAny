@@ -1,7 +1,7 @@
 import type { AIEndpoint } from "../types";
 import { getDefaultBaseUrl, providerRequiresApiKey } from "../utils";
 import { logAIEndpointDebug, summarizeDebugText } from "./request-debug";
-import { getEndpointFetch } from "./llm-provider";
+import { getEndpointFetch, isSessionProxyEndpoint } from "./llm-provider";
 import {
   buildOpenAICompatibleUrl,
   buildProviderModelsUrl,
@@ -53,6 +53,48 @@ function assertConfigured(endpoint: AIEndpoint, baseUrl: string): void {
 
 function normalizeGoogleModel(model: string): string {
   return model.replace(/^models\//, "");
+}
+
+/**
+ * 会话代理（AIChatAsChatAI）的「测试连接」：只打 GET /v1/models。
+ *
+ * 为什么不像其它 provider 那样发一轮 completion：
+ *  1) 它的 /v1/* 要求带会话标识（缺了刻意返回 400），而「测试连接」没有任何会话锚点，
+ *     只有真实聊天窗口才有（ReadAny 用 readany:thread:<threadId>）；
+ *  2) 探活不该真的在上游建一条会话（还占同会话的最小间隔限流）。
+ * 能拉到模型列表就等于证明：服务在跑 / API key 有效 / 路径正确 —— 与「拉取模型」同一件事。
+ */
+async function probeSessionProxy(endpoint: AIEndpoint): Promise<EndpointTestResult> {
+  const url = buildProviderModelsUrl(
+    endpoint.provider,
+    endpoint.baseUrl,
+    endpoint.apiKey,
+    endpoint.useExactRequestUrl,
+  );
+  if (!url) {
+    throw new Error(
+      endpoint.useExactRequestUrl
+        ? "Session proxy probes GET /v1/models; turn off Exact Request URL mode first."
+        : "Cannot derive the models URL. Check the Base URL.",
+    );
+  }
+
+  const headers: Record<string, string> = { accept: "application/json" };
+  if (endpoint.apiKey) headers.Authorization = `Bearer ${endpoint.apiKey}`;
+
+  const data = await fetchJson(url, { method: "GET", headers }, {
+    endpoint,
+    action: "test-connection-models",
+  });
+
+  const models = Array.isArray(data?.data) ? data.data : null;
+  if (!models) {
+    throw new Error(
+      "Unexpected response from the models endpoint (expected OpenAI-style { data: [...] }).",
+    );
+  }
+
+  return { modelCount: models.length, requestUrl: url };
 }
 
 async function parseErrorBody(response: Response): Promise<string> {
@@ -437,6 +479,13 @@ export async function testAIEndpoint(
 ): Promise<EndpointTestResult> {
   const baseUrl = getEndpointBaseUrl(endpoint);
   assertConfigured(endpoint, baseUrl);
+
+  // 会话代理（AIChatAsChatAI）：探活走 GET /v1/models（见 probeSessionProxy 注释）。
+  // 放在最前面：它既不需要模型名，也不该被下面「完全自定义请求地址」模式的模型名检查挡住。
+  if (isSessionProxyEndpoint(endpoint)) {
+    return probeSessionProxy(endpoint);
+  }
+
   if (endpoint.useExactRequestUrl && providerSupportsExactRequestUrl(endpoint.provider) && !options.model && endpoint.models.length === 0) {
     throw new Error("Exact request URL mode requires a model name. Add one manually before testing.");
   }

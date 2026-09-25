@@ -37,6 +37,7 @@ const PROVIDER_OPTIONS: { id: AIProviderType; name: string }[] = [
   { id: "lmstudio", name: "LM Studio" },
   { id: "openrouter", name: "OpenRouter" },
   { id: "siliconflow", name: "SiliconFlow" },
+  { id: "aichataschat", name: "AIChatAsChatAI (Session Proxy)" },
   { id: "custom", name: "Custom" },
 ];
 

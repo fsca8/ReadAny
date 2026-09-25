@@ -15,6 +15,12 @@ vi.mock("../llm-provider", () => ({
   createChatModel: vi.fn(async () => ({
     stream: vi.fn(),
   })),
+  // reading-agent 现在会判定「是否会话代理（AIChatAsChatAI）」；这些用例都走普通 provider，
+  // 所以固定返回 false（会话代理分支的行为另测）。
+  isSessionProxyConfig: vi.fn(() => false),
+  isSessionProxyEndpoint: vi.fn(() => false),
+  AICHATASCHAT_PROVIDER: "aichataschat",
+  buildSessionKey: (kind: string, id: string) => `readany:${kind}:${id}`,
 }));
 
 const getReadingContextSnapshotMock = vi.hoisted(() => vi.fn(() => null));
