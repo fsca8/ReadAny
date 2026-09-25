@@ -24,11 +24,40 @@ const path = require("node:path");
  *
  * EAS/release builds are unaffected — EAS prebuilds in the cloud from source,
  * and Play Store releases still need the 32-bit ABIs.
+ *
+ * `org.gradle.jvmargs` is plugin-owned: it is a machine-derived resource
+ * setting, not a user preference. Any untagged value in the generated file
+ * (the Expo template default, or a stale hand edit) is replaced by the
+ * computed one. Worker count and daemon timeout are also managed, but a
+ * hand-written value for those is respected.
  */
 
 const MANAGED_TAG = "readany-gradle-memory";
 
+/** Idle daemon is reclaimed after this timeout in ms (mirrors ~/.gradle/gradle.properties). */
+const DAEMON_IDLE_TIMEOUT_MS = "180000";
+
+/**
+ * gradle.properties is parsed as a Java .properties file, where `#` only starts
+ * a comment on a line of its own — an inline `value # tag` corrupts the *value*
+ * (observed on Gradle 8.14: `org.gradle.workers.max=4 # readany-gradle-memory`
+ * → "Value '4 # readany-gradle-memory' given for org.gradle.workers.max Gradle
+ * property is invalid", which aborts the build before a single task runs).
+ * The tag therefore lives on the line *above* the property it marks.
+ */
+const tagFor = (key) => `# ${MANAGED_TAG}: ${key}`;
+const isTagLine = (line) => line.trim().startsWith("#") && line.includes(MANAGED_TAG);
+const keyOf = (line) => line.split("=")[0]?.trim();
+const isPropertyLine = (line) => {
+  const trimmed = line.trim();
+  return trimmed !== "" && !trimmed.startsWith("#") && trimmed.includes("=");
+};
+
 const heapMbFor = (totalBytes) => {
+  // Explicit override wins — e.g. READANY_GRADLE_HEAP_MB=6144 for a heavy
+  // release build on a box with plenty of spare RAM.
+  const override = Number.parseInt(process.env.READANY_GRADLE_HEAP_MB ?? "", 10);
+  if (Number.isFinite(override) && override > 0) return override;
   const totalMb = Math.floor(totalBytes / (1024 * 1024));
   const quarter = Math.floor(totalMb / 4);
   return Math.max(1024, Math.min(4096, Math.floor(quarter / 512) * 512));
@@ -40,31 +69,51 @@ const desiredMemory = () => {
   const metaspace = Math.max(256, Math.min(1024, Math.floor(heap / 4)));
   const workers = Math.max(1, Math.min(4, os.cpus()?.length ?? 2));
   return {
-    jvmargs: `org.gradle.jvmargs=-Xmx${heap}m -XX:MaxMetaspaceSize=${metaspace}m`,
-    workers: `org.gradle.workers.max=${workers}`,
+    // Bare values: the caller owns the `key=` prefix.
+    jvmargs: `-Xmx${heap}m -XX:MaxMetaspaceSize=${metaspace}m`,
+    workers: String(workers),
   };
 };
 
-const isManaged = (line) => line.includes(MANAGED_TAG);
-const keyOf = (line) => line.split("=")[0]?.trim();
-
 /**
- * Set `key` to `value`, unless an unmanaged line already sets it.
- * Lines this plugin wrote previously are tagged with MANAGED_TAG and may be
- * updated; anything else was set deliberately by a human and is left alone, so
- * a local override survives `prebuild --clean`.
+ * Drop every property line this plugin wrote (any version of it) and report
+ * which managed keys a human set by hand — those are left untouched, so a local
+ * override survives `prebuild --clean`.
  */
-const applyKey = (lines, key, value) => {
-  const pattern = new RegExp(`^\\s*${key.replace(/\./g, "\\.")}\\s*=`);
-  const index = lines.findIndex((line) => pattern.test(line));
-  if (index === -1) {
-    lines.push(`${value} # ${MANAGED_TAG}`);
-    return lines;
+const stripManaged = (source, managedKeys) => {
+  const lines = source.split(/\r?\n/);
+  const kept = [];
+  const humanKeys = new Set();
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (isTagLine(line)) {
+      // Ours: the tag, plus the property line directly underneath it.
+      if (index + 1 < lines.length && isPropertyLine(lines[index + 1])) index += 1;
+      continue;
+    }
+    // Legacy format: the tag was appended inline, which is exactly what broke
+    // Gradle. Recognise it so the broken value cannot survive a re-prebuild.
+    if (line.includes(MANAGED_TAG)) continue;
+    // `org.gradle.jvmargs` is machine-derived, never a user preference: this
+    // plugin owns it unconditionally. Any untagged line (the Expo template
+    // default, or a stale hand edit) is dropped and replaced by the computed
+    // value below. Matching on the *value* instead was brittle — it silently
+    // overwrote anyone who happened to pick the same number deliberately.
+    if (isPropertyLine(line) && keyOf(line) === "org.gradle.jvmargs") {
+      continue;
+    }
+    kept.push(line);
+    // jvmargs is plugin-owned and already handled above, so a surviving line
+    // here is only reportable for the keys we may skip below.
+    if (
+      isPropertyLine(line) &&
+      managedKeys.has(keyOf(line)) &&
+      keyOf(line) !== "org.gradle.jvmargs"
+    ) {
+      humanKeys.add(keyOf(line));
+    }
   }
-  if (isManaged(lines[index])) {
-    lines[index] = `${value} # ${MANAGED_TAG}`;
-  }
-  return lines;
+  return { lines: kept, humanKeys };
 };
 
 const withGradleMemory = (config) =>
@@ -79,16 +128,22 @@ const withGradleMemory = (config) =>
         ? fs.readFileSync(gradlePropertiesPath, "utf8")
         : "";
 
-      const managedKeys = new Set(["org.gradle.jvmargs", "org.gradle.workers.max"]);
-      let lines = source
-        .split(/\r?\n/)
-        // Drop managed lines for keys we no longer manage, so a renamed key
-        // cannot leave a stale duplicate behind.
-        .filter((line) => !(isManaged(line) && !managedKeys.has(keyOf(line))));
+      const managedKeys = new Set([
+        "org.gradle.jvmargs",
+        "org.gradle.workers.max",
+        "org.gradle.daemon.idletimeout",
+      ]);
+      const { lines, humanKeys } = stripManaged(source, managedKeys);
 
       const { jvmargs, workers } = desiredMemory();
-      lines = applyKey(lines, "org.gradle.jvmargs", jvmargs);
-      lines = applyKey(lines, "org.gradle.workers.max", workers);
+      for (const [key, value] of [
+        ["org.gradle.jvmargs", jvmargs],
+        ["org.gradle.workers.max", workers],
+        ["org.gradle.daemon.idletimeout", DAEMON_IDLE_TIMEOUT_MS],
+      ]) {
+        if (humanKeys.has(key)) continue;
+        lines.push(tagFor(key), `${key}=${value}`);
+      }
 
       fs.writeFileSync(gradlePropertiesPath, lines.join("\n"));
       return cfg;
