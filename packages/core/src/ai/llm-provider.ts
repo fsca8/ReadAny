@@ -542,6 +542,39 @@ export interface LLMOptions {
   maxTokens?: number;
   streaming?: boolean;
   deepThinking?: boolean;
+  /**
+   * AIChatAsChatAI（会话代理）的会话标识（client_key）。
+   * 服务端靠它恢复「这条会话到哪了」；不传则服务端返回 400。
+   */
+  sessionKey?: string;
+}
+
+/** 会话代理 provider id（AIChatAsChatAI） */
+export const AICHATASCHAT_PROVIDER = "aichataschat";
+
+/** 该 endpoint 是不是会话代理 */
+export function isSessionProxyEndpoint(endpoint: AIEndpoint | null | undefined): boolean {
+  return endpoint?.provider === AICHATASCHAT_PROVIDER;
+}
+
+/** 当前生效的 endpoint 是不是会话代理（没配 endpoint 时返回 false，不抛错） */
+export function isSessionProxyConfig(config: AIConfig): boolean {
+  try {
+    return isSessionProxyEndpoint(resolveActiveEndpoint(config).endpoint);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 构造发给会话代理的会话标识（client_key）。
+ * 必须用「客户端自己的窗口 id」——只有客户端知道用户此刻要恢复哪个窗口。
+ *   thread → readany:thread:<threadId>   一个聊天窗口 = 一条上游会话
+ *   memory → readany:memory:<threadId>   记忆压缩专用，避免和对话内容混在一条上游会话里
+ *   skill  → readany:skill:<name>        技能执行专用
+ */
+export function buildSessionKey(kind: "thread" | "memory" | "skill", id: string): string {
+  return `readany:${kind}:${id}`;
 }
 
 export function resolveActiveEndpoint(config: AIConfig): {
@@ -581,6 +614,7 @@ export async function createChatModel(
     maxTokens: options.maxTokens ?? config.maxTokens,
     streaming: options.streaming,
     deepThinking: options.deepThinking,
+    sessionKey: options.sessionKey,
   });
 }
 
@@ -746,6 +780,30 @@ export async function createChatModelFromEndpoint(
         maxTokens,
         streaming,
       } as ConstructorParameters<typeof ChatDeepSeek>[0]);
+    }
+
+    case "aichataschat": {
+      // AIChatAsChatAI 会话代理：走它的 OpenAI 兼容层 /v1/*，额外带两个头
+      //   X-Session-Id  客户端会话标识（哪个聊天窗口）—— 服务端靠它恢复上游上下文，缺了会 400
+      //   X-Thinking    深度思考开关（服务端只认 "true"）
+      // 注意：不要落到下面的 default 分支——那里会因模型名里含 "deepseek" 被当成官方 DeepSeek API。
+      const { ChatOpenAI } = await import("@langchain/openai");
+      const defaultHeaders: Record<string, string> = {};
+      if (options.sessionKey) defaultHeaders["X-Session-Id"] = options.sessionKey;
+      if (options.deepThinking) defaultHeaders["X-Thinking"] = "true";
+
+      return new ChatOpenAI({
+        model,
+        apiKey,
+        configuration: {
+          baseURL: getEndpointBaseUrl(endpoint),
+          fetch: endpointFetch,
+          ...(Object.keys(defaultHeaders).length > 0 ? { defaultHeaders } : {}),
+        },
+        temperature,
+        maxTokens,
+        streaming,
+      });
     }
 
     default: {

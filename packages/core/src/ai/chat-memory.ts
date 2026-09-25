@@ -1,7 +1,7 @@
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { updateThreadMemory } from "../db/database";
 import type { AIConfig, Message, Thread } from "../types";
-import { createChatModel } from "./llm-provider";
+import { buildSessionKey, createChatModel } from "./llm-provider";
 
 const MIN_COMPRESSIBLE_MESSAGES = 4;
 const MAX_SOURCE_CHARS = 12000;
@@ -46,6 +46,8 @@ export async function maybeCompressThreadMemory(
       temperature: 0.2,
       maxTokens: 700,
       streaming: false,
+      // 记忆压缩走独立的上游会话，避免和对话内容混在一条会话里（会话代理必须给会话标识）
+      sessionKey: buildSessionKey("memory", thread.id),
     });
 
     const source = buildSource(thread.memorySummary, compressible);

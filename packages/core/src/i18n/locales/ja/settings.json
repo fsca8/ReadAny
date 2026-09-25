@@ -424,6 +424,7 @@
     "webdavAllowInsecure": "安全でない接続を許可",
     "ai_provider_zhipu": "智譜 GLM",
     "ai_provider_aliyun": "アリババクラウド通義",
+    "ai_provider_aichataschat": "AIChatAsChatAI（セッションプロキシ）",
     "ai_provider_custom": "カスタム（OpenAI互換）",
     "ai_currentLabel": "現在:",
     "ai_searchModels": "モデルを検索...",

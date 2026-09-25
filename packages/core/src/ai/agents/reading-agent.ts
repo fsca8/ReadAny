@@ -15,9 +15,9 @@ import { estimateTokens } from "../../rag/chunker";
  * 5. System prompt from system-prompt.ts
  */
 import type { AIConfig, Book, SemanticContext, Skill } from "../../types";
-import { createChatModel } from "../llm-provider";
+import { createChatModel, isSessionProxyConfig } from "../llm-provider";
 import { getReadingContextSnapshot } from "../reading-context-service";
-import { buildSystemPrompt } from "../system-prompt";
+import { buildSessionProxySystemPrompt, buildSystemPrompt } from "../system-prompt";
 import { ThinkTagStreamParser } from "../think-tag-parser";
 import type { ToolDefinition, ToolParameter } from "../tools/tool-types";
 
@@ -584,6 +584,11 @@ export interface ReadingAgentOptions {
   deepThinking?: boolean;
   spoilerFree?: boolean;
   memorySummary?: string;
+  /**
+   * AIChatAsChatAI（会话代理）的会话标识（client_key），由上层用 thread.id 生成。
+   * 服务端靠它恢复上游会话；只有会话代理 provider 会用到。
+   */
+  sessionKey?: string;
   /** Injected tool provider — returns available tools for the agent */
   getAvailableTools: (options: {
     bookId: string | null;
@@ -816,6 +821,7 @@ export async function* streamReadingAgent(
     deepThinking,
     spoilerFree,
     memorySummary,
+    sessionKey,
     getAvailableTools,
     signal,
     toolTimeoutMs = DEFAULT_TOOL_TIMEOUT_MS,
@@ -826,6 +832,9 @@ export async function* streamReadingAgent(
   const readingContextSnapshot = getReadingContextSnapshot();
   const selectionActive = !!readingContextSnapshot?.selection?.text?.trim();
   const effectiveBookId = book?.id || bookId || null;
+  // 会话代理（AIChatAsChatAI）：上下文归上游会话，客户端不发历史、也不做工具调用 ——
+  // 见下面「注册 0 个工具 → 走无工具直接流式分支」与精简 system。
+  const isSessionProxy = isSessionProxyConfig(aiConfig);
   const questionCategory = detectQuestionCategory({
     userInput,
     hasBookContext: !!effectiveBookId,
@@ -863,21 +872,26 @@ export async function* streamReadingAgent(
       maxTokens: aiConfig.maxTokens,
       streaming: true,
       deepThinking,
+      sessionKey,
     });
 
     // Check abort after async operation
     if (isAborted()) return;
 
     // Register tools via injected getAvailableTools, then narrow obvious chapter tasks.
-    const tools = filterToolsForQuestion({
-      tools: getAvailableTools({
-        bookId: effectiveBookId,
-        isVectorized,
-        enabledSkills,
-      }),
-      category: questionCategory,
-      isVectorized,
-    });
+    // 会话代理（AIChatAsChatAI）不支持工具调用：注册 0 个工具 → 下面走「无工具 → 直接流式」分支，
+    // 既不发 tools 定义、也不启动 agent 图，避免模型去猜「我该调哪个工具」。
+    const tools = isSessionProxy
+      ? []
+      : filterToolsForQuestion({
+          tools: getAvailableTools({
+            bookId: effectiveBookId,
+            isVectorized,
+            enabledSkills,
+          }),
+          category: questionCategory,
+          isVectorized,
+        });
     console.log(
       "[ReadingAgent] tools",
       JSON.stringify({
@@ -888,7 +902,7 @@ export async function* streamReadingAgent(
     );
 
     // Build system prompt
-    const systemPrompt = buildSystemPrompt({
+    const promptContext = {
       book,
       bookId: effectiveBookId,
       semanticContext,
@@ -901,7 +915,12 @@ export async function* streamReadingAgent(
       selectionActive,
       routeHint: buildRouteHint(questionCategory, selectionActive, isVectorized),
       allowedToolNames: tools.map((tool) => tool.name),
-    });
+    };
+    // 会话代理：用精简 system（纯角色 + 当前书籍）。原文里的「必须用工具取内容」在没有工具时会误导模型；
+    // 当前阅读上下文已由 message-pipeline 随每条 user 消息带上（不依赖 system）。
+    const systemPrompt = isSessionProxy
+      ? buildSessionProxySystemPrompt(promptContext)
+      : buildSystemPrompt(promptContext);
 
     // Build input messages (history + user input, without system — handled by agent prompt)
     // For DeepSeek reasoner, we must include reasoning_content in assistant messages

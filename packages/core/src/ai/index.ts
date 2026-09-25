@@ -1,8 +1,12 @@
 export type { ToolDefinition, ToolParameter } from "./tools";
 
 export {
+  AICHATASCHAT_PROVIDER,
+  buildSessionKey,
   createChatModel,
   createChatModelFromEndpoint,
+  isSessionProxyConfig,
+  isSessionProxyEndpoint,
   resolveActiveEndpoint,
   setStreamingFetch,
 } from "./llm-provider";
@@ -19,7 +23,7 @@ export type { StreamingOptions } from "./streaming";
 export { getAIEndpointRequestPreview, testAIEndpoint } from "./test-endpoint";
 export type { EndpointTestResult } from "./test-endpoint";
 
-export { buildSystemPrompt } from "./system-prompt";
+export { buildReadingContextBlock, buildSessionProxySystemPrompt, buildSystemPrompt } from "./system-prompt";
 
 export { BUILTIN_EMBEDDING_MODELS } from "./builtin-embedding-models";
 export type { BuiltinEmbeddingModel } from "./builtin-embedding-models";

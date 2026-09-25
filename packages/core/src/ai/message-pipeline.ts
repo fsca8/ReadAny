@@ -6,10 +6,15 @@
  */
 import type { Message, SemanticContext, Thread } from "../types";
 import type { Book, Skill } from "../types";
-import { buildSystemPrompt } from "./system-prompt";
+import { buildReadingContextBlock, buildSystemPrompt } from "./system-prompt";
 
 interface PipelineConfig {
   slidingWindowSize: number; // default 8
+  /**
+   * AIChatAsChatAI（会话代理）：把「当前阅读上下文」拼进最后一条 user 消息。
+   * 服务端只把最后一条 user 发上游，靠 system 带上下文在第二轮之后就失效。
+   */
+  readingContextInUserMessage?: boolean;
 }
 
 interface PipelineContext {
@@ -64,7 +69,36 @@ export function processMessages(
       return msg;
     });
 
-  return { systemPrompt, messages: processed };
+  const messages = config.readingContextInUserMessage
+    ? appendReadingContextToLastUser(processed, context.semanticContext)
+    : processed;
+
+  return { systemPrompt, messages };
+}
+
+/**
+ * 把「当前阅读上下文」拼到最后一条 user 消息前面（AIChatAsChatAI 会话代理用）。
+ * 上下文放前面、问题放最后，模型才会把上下文当成「已知材料」而不是待办事项。
+ */
+function appendReadingContextToLastUser(
+  messages: ProcessedMessage[],
+  semanticContext: SemanticContext | null,
+): ProcessedMessage[] {
+  const block = buildReadingContextBlock(semanticContext);
+  if (!block) return messages;
+  let lastUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      lastUserIndex = i;
+      break;
+    }
+  }
+  if (lastUserIndex < 0) return messages;
+  return messages.map((message, index) =>
+    index === lastUserIndex
+      ? { ...message, content: `${block}\n\n---\n\n${message.content}` }
+      : message,
+  );
 }
 
 /** Apply sliding window, keeping system messages + last N user/assistant pairs */

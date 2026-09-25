@@ -6,6 +6,7 @@ import i18n from "i18next";
  */
 import type { AIConfig, Book, SemanticContext, Skill, Thread } from "../types";
 import { streamReadingAgent } from "./agents/reading-agent";
+import { buildSessionKey, isSessionProxyConfig } from "./llm-provider";
 import { processMessages } from "./message-pipeline";
 import { getToolResultError } from "./tool-result";
 import type { ToolDefinition } from "./tools/tool-types";
@@ -70,6 +71,10 @@ export class StreamingChat {
     this.abortController = new AbortController();
     const signal = this.abortController.signal;
 
+    // 会话代理（AIChatAsChatAI）：上下文归上游会话，客户端只发当前消息，
+    // 因此「当前阅读上下文」必须随 user 消息带上（服务端只会把最后一条 user 发出去）。
+    const isSessionProxy = isSessionProxyConfig(options.aiConfig);
+
     const { messages } = processMessages(
       options.thread,
       {
@@ -81,7 +86,10 @@ export class StreamingChat {
         userLanguage: i18n.language || options.book?.meta.language || "en",
         memorySummary: options.thread.memorySummary,
       },
-      { slidingWindowSize: options.aiConfig.slidingWindowSize },
+      {
+        slidingWindowSize: options.aiConfig.slidingWindowSize,
+        readingContextInUserMessage: isSessionProxy,
+      },
     );
 
     const userInput = messages[messages.length - 1]?.content || "";
@@ -111,6 +119,8 @@ export class StreamingChat {
           deepThinking: options.deepThinking,
           spoilerFree: options.spoilerFree,
           memorySummary: options.thread.memorySummary,
+          // 会话标识：用 ReadAny 自己的聊天窗口 id —— 只有客户端知道用户此刻要恢复哪个窗口
+          sessionKey: isSessionProxy ? buildSessionKey("thread", options.thread.id) : undefined,
           getAvailableTools: options.getAvailableTools,
           signal,
         },

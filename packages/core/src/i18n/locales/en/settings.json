@@ -132,6 +132,7 @@
     "ai_name": "Name",
     "ai_provider_zhipu": "Zhipu GLM",
     "ai_provider_aliyun": "Alibaba Cloud Tongyi",
+    "ai_provider_aichataschat": "AIChatAsChatAI (Session Proxy)",
     "ai_provider_custom": "Custom (OpenAI Compatible)",
     "ai_currentLabel": "Current",
     "ai_searchModels": "Search models...",

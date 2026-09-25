@@ -132,6 +132,7 @@
     "ai_name": "名稱",
     "ai_provider_zhipu": "智譜 GLM",
     "ai_provider_aliyun": "阿里雲通義",
+    "ai_provider_aichataschat": "AIChatAsChatAI（會話代理）",
     "ai_provider_custom": "Custom (OpenAI Compatible)",
     "ai_currentLabel": "目前",
     "ai_searchModels": "搜尋模型...",

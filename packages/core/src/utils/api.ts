@@ -201,6 +201,16 @@ export const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
     placeholder: "https://aihubmix.com",
     keyPlaceholder: "sk-...",
   },
+  // AIChatAsChatAI：会话代理（本地服务，上下文归上游 web AI 会话）。
+  // 走 OpenAI 兼容层 /v1/*，但服务端要求带会话标识（X-Session-Id，见 llm-provider 的 case）。
+  aichataschat: {
+    id: "aichataschat",
+    name: "AIChatAsChatAI (Session Proxy)",
+    defaultBaseUrl: "http://127.0.0.1:8090",
+    needsV1Suffix: true,
+    placeholder: "http://127.0.0.1:8090",
+    keyPlaceholder: "sk_readany_...",
+  },
   custom: {
     id: "custom",
     name: "Custom (OpenAI Compatible)",

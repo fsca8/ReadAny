@@ -424,6 +424,7 @@
     "webdavAllowInsecure": "비보안 연결 허용",
     "ai_provider_zhipu": "智谱 GLM",
     "ai_provider_aliyun": "알리바바클라우드 통의",
+    "ai_provider_aichataschat": "AIChatAsChatAI (세션 프록시)",
     "ai_provider_custom": "커스텀 (OpenAI 호환)",
     "ai_currentLabel": "현재:",
     "ai_searchModels": "모델 검색...",

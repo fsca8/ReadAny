@@ -7,7 +7,7 @@ import { HumanMessage, SystemMessage } from "@langchain/core/messages";
  * Skills can be built-in or custom user-defined.
  */
 import type { AIConfig, Skill } from "../../types";
-import { createChatModel } from "../llm-provider";
+import { buildSessionKey, createChatModel } from "../llm-provider";
 import { getBuiltinSkill } from "./builtin-skills";
 
 export interface SkillExecutionResult {
@@ -48,6 +48,9 @@ export class SkillExecutor {
         temperature: 0.7,
         maxTokens: 4096,
         streaming: false,
+        // 技能执行走独立上游会话（会话代理必须给会话标识）；
+        // 注意：这里被缓存复用，所以不按 skill 名区分 —— 如需按技能隔离，改成不缓存即可。
+        sessionKey: buildSessionKey("skill", "shared"),
       });
     }
     return this.llm;

@@ -111,6 +111,37 @@ function buildSemanticSection(ctx: SemanticContext | null): string {
     .join("\n");
 }
 
+/**
+ * AIChatAsChatAI（会话代理）用：把「当前阅读上下文」做成独立文本块，随**每条 user 消息**发给模型。
+ *
+ * 背景：本项目的上游把上下文归到它自己的会话里，服务端只把**最后一条 user** 发出去，
+ * 所以当前页文本/划线必须随消息带上，不能只放在 system（system 只会在会话第一轮发一次）。
+ */
+export function buildReadingContextBlock(ctx: SemanticContext | null): string {
+  const section = buildSemanticSection(ctx);
+  if (!section) return "";
+  return `${section}\n\nUse the reading context above when answering; the user's message follows after the divider.`;
+}
+
+/**
+ * AIChatAsChatAI（会话代理）用的精简 system：只保留角色 + 当前书籍。
+ *
+ * 不包含工具目录 / 工作流 / 约束段 —— 会话代理不做工具调用（客户端已关闭工具），
+ * 原文里的「必须用工具取内容」会误导模型，所以这里换成不依赖工具的角色描述。
+ */
+const SESSION_PROXY_ROLE =
+  "You are ReadAny AI, a reading assistant. You help the user understand, analyze and annotate the book they are reading. Answer directly and concisely using what you are given; never fabricate book content you were not shown.";
+
+export function buildSessionProxySystemPrompt(ctx: PromptContext): string {
+  return [
+    SESSION_PROXY_ROLE,
+    buildBookContextSection(ctx.book),
+    ctx.userLanguage ? `## Output\n- Reply in: ${ctx.userLanguage}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n---\n\n");
+}
+
 function buildRouteSection(
   category?: ReadingQuestionCategory,
   selectionActive?: boolean,

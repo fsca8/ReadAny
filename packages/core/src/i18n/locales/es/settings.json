@@ -422,6 +422,7 @@
     "webdavAllowInsecure": "Permitir conexiones inseguras",
     "ai_provider_zhipu": "Zhipu GLM",
     "ai_provider_aliyun": "Alibaba Cloud Tongyi",
+    "ai_provider_aichataschat": "AIChatAsChatAI (proxy de sesión)",
     "ai_provider_custom": "Personalizado (Compatible OpenAI)",
     "ai_currentLabel": "Actual:",
     "ai_searchModels": "Buscar modelo...",
