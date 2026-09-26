@@ -7,5 +7,11 @@ export type {
   FilePickerOptions,
   WebSocketOptions,
   UpdateInfo,
+  BuildInfo,
 } from "./platform";
-export { setPlatformService, getPlatformService, waitForPlatformService } from "./platform";
+export {
+  setPlatformService,
+  getPlatformService,
+  waitForPlatformService,
+  formatVersionLabel,
+} from "./platform";

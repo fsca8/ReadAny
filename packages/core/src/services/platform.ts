@@ -42,6 +42,29 @@ export interface FileTransferOptions {
   onProgress?: (loaded: number, total: number) => void;
 }
 
+/**
+ * Identifies the exact build the app is running.
+ *
+ * `version` is the semver from the platform manifest, `commit` is the short git
+ * hash the build was made from — injected at build time by the desktop bundler
+ * (vite `__READANY_COMMIT__`) and by the mobile app config (`extra.commitHash`).
+ * Builds without git information report `"dev"` (dev server) or `"unknown"`.
+ */
+export interface BuildInfo {
+  version: string;
+  commit: string;
+}
+
+/**
+ * Version label shown in the UI: `1.4.1+991640b2`, or just `1.4.1` when the
+ * build carries no commit information. Mirrors the artifact naming used by the
+ * release script (`ReadAny_1.4.1+991640b2_x64-setup.exe`), so what the app
+ * displays matches the file that was delivered.
+ */
+export function formatVersionLabel(info: BuildInfo): string {
+  return info.commit ? `${info.version}+${info.commit}` : info.version;
+}
+
 export interface UpdateInfo {
   version: string;
   notes?: string;
@@ -104,6 +127,13 @@ export interface IPlatformService {
 
   // ---- App info ----
   getAppVersion(): Promise<string>;
+  /**
+   * Version + commit hash of the running build. `getAppVersion` stays a plain
+   * semver on purpose (update checks compare it), while this is what the UI and
+   * feedback payloads display, so a reported version can always be traced back
+   * to the exact commit it was built from.
+   */
+  getBuildInfo(): Promise<BuildInfo>;
 
   // ---- Update (desktop only, mobile returns noop) ----
   checkUpdate?(): Promise<UpdateInfo | null>;

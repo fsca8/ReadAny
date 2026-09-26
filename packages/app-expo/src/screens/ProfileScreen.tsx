@@ -17,6 +17,7 @@ import {
   TypeIcon,
   Volume2Icon,
 } from "@/components/ui/Icon";
+import { currentVersionLabel } from "@/lib/build-info";
 import { SyncButton } from "@/components/ui/SyncButton";
 import { useResponsiveLayout } from "@/hooks/use-responsive-layout";
 import { clearMobileRuntimeCache, formatCacheSize } from "@/lib/platform/mobile-cache";
@@ -639,7 +640,7 @@ export function ProfileScreen() {
 
         {/* Version */}
         <Text style={s.version} maxFontSizeMultiplier={1.4}>
-          {t("profile.version", { version: Constants.expoConfig?.version ?? "1.0.0" })}
+          {t("profile.version", { version: currentVersionLabel() })}
         </Text>
         <TouchableOpacity
           style={s.icpLink}

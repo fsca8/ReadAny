@@ -1,4 +1,5 @@
 import i18n from "@readany/core/i18n";
+import { readCommitHash } from "../build-info";
 /**
  * ExpoPlatformService — IPlatformService implementation for Expo / React Native.
  *
@@ -11,6 +12,7 @@ import i18n from "@readany/core/i18n";
  * - expo-constants for app version
  */
 import type {
+  BuildInfo,
   FetchOptions,
   FilePickerOptions,
   FileTransferOptions,
@@ -646,6 +648,15 @@ export class ExpoPlatformService implements IPlatformService {
 
   async getAppVersion(): Promise<string> {
     return Constants.expoConfig?.version ?? "1.0.0";
+  }
+
+  /**
+   * Commit hash comes from `extra.commitHash`, written by app.config.js at bundle
+   * time (the same mechanism that carries `extra.appVariant`), so the released
+   * APK reports the exact commit it was built from.
+   */
+  async getBuildInfo(): Promise<BuildInfo> {
+    return { version: await this.getAppVersion(), commit: readCommitHash() };
   }
 
   // ---- Update (GitHub releases) ----

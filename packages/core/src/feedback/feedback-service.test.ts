@@ -35,6 +35,7 @@ function createTestPlatform(): IPlatformService {
       throw new Error("WebSocket is not available in feedback log tests");
     },
     getAppVersion: async () => "0.0.0-test",
+    getBuildInfo: async () => ({ version: "0.0.0-test", commit: "" }),
     kvGetItem: async () => null,
     kvSetItem: async () => {},
     kvRemoveItem: async () => {},

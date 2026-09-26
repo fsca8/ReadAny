@@ -1,9 +1,11 @@
+import { execSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { access, mkdir, readFile as fsReadFile, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import type {
+  BuildInfo,
   FetchOptions,
   FilePickerOptions,
   IDatabase,
@@ -12,6 +14,17 @@ import type {
   UpdateInfo,
   WebSocketOptions,
 } from "@readany/core/services";
+
+/** Commit of the working tree the CLI was started from (best effort). */
+function readGitCommitHash(): string {
+  try {
+    return execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+  } catch {
+    return "unknown";
+  }
+}
 
 type BetterSqliteDatabaseConstructor = typeof import("better-sqlite3");
 
@@ -176,6 +189,15 @@ export class NodePlatformService implements IPlatformService {
 
   async getAppVersion(): Promise<string> {
     return "0.1.0";
+  }
+
+  /**
+   * The CLI always runs against a checkout (`tsx src/bin/readany.ts`, or a built
+   * dist next to it), so the commit is read at runtime instead of being baked in
+   * like it is for the desktop and mobile bundles.
+   */
+  async getBuildInfo(): Promise<BuildInfo> {
+    return { version: await this.getAppVersion(), commit: readGitCommitHash() };
   }
 
   async kvGetItem(_key: string): Promise<string | null> {

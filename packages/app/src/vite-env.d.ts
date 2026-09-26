@@ -1,5 +1,11 @@
 /// <reference types="vite/client" />
 
+/**
+ * Short commit hash of the build, injected by vite (`define` in vite.config.ts)
+ * and surfaced through `platform.getBuildInfo()`.
+ */
+declare const __READANY_COMMIT__: string;
+
 declare interface PromiseConstructor {
   withResolvers<T>(): {
     promise: Promise<T>;

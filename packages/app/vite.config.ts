@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -7,8 +8,38 @@ import { defineConfig } from "vite";
 const host = process.env.TAURI_DEV_HOST;
 const pdfjsDist = path.resolve(__dirname, "../../node_modules/pdfjs-dist");
 
+/**
+ * Short commit hash baked into the bundle so the running app can show (and
+ * report) exactly which code it is — see `getBuildInfo` in
+ * src/lib/platform/tauri-platform-service.ts. Reads the same value the release
+ * script puts in the artifact name; `-dirty` marks builds made from a modified
+ * working tree, and `dev` is the fallback outside a git checkout.
+ */
+function readCommitHash(): string {
+  try {
+    const hash = execSync("git rev-parse --short HEAD", {
+      cwd: __dirname,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+    const dirty = execSync("git status --porcelain", {
+      cwd: __dirname,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+    return dirty ? `${hash}-dirty` : hash;
+  } catch {
+    return "dev";
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
+  define: {
+    __READANY_COMMIT__: JSON.stringify(readCommitHash()),
+  },
   plugins: [react(), tailwindcss()],
   worker: {
     format: "es",

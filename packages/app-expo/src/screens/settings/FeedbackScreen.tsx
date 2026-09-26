@@ -18,7 +18,7 @@ import {
   submitFeedback,
 } from "@readany/core/feedback";
 import type { DeviceInfo, FeedbackRecord, FeedbackType } from "@readany/core/feedback";
-import Constants from "expo-constants";
+import { currentVersionLabel } from "@/lib/build-info";
 import type { TFunction } from "i18next";
 import { Bug, Check, Lightbulb, MessageSquare } from "lucide-react-native";
 import type { LucideIcon } from "lucide-react-native";
@@ -146,7 +146,7 @@ function SubmitTab({ colors, t, locale }: FeedbackTabProps & { locale: string })
       collectDeviceInfo({
         platform: Platform.OS as DeviceInfo["platform"],
         osVersion: `${Platform.OS} ${Platform.Version}`,
-        appVersion: Constants.expoConfig?.version ?? "unknown",
+        appVersion: currentVersionLabel(),
         locale,
       }),
     [locale],

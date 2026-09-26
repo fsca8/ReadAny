@@ -78,6 +78,9 @@ function createPlatform(root: string): TestPlatform {
     async getAppVersion() {
       return "0.0.0-test";
     },
+    async getBuildInfo() {
+      return { version: "0.1.0", commit: "" };
+    },
     async kvGetItem() {
       return null;
     },

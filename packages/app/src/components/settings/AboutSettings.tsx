@@ -18,7 +18,7 @@ import {
   resetStatus,
   subscribeToUpdates,
 } from "@/lib/updater";
-import { getVersion } from "@tauri-apps/api/app";
+import { formatVersionLabel, getPlatformService } from "@readany/core/services";
 import {
   AlertCircle,
   BookOpen,
@@ -58,7 +58,12 @@ export function AboutSettings() {
   const [appVersion, setAppVersion] = useState<string>("");
 
   useEffect(() => {
-    getVersion().then(setAppVersion).catch(console.error);
+    // Version + commit hash of the running build (e.g. "1.4.1+991640b2") — the
+    // label matches the installer filename this build produced.
+    getPlatformService()
+      .getBuildInfo()
+      .then((info) => setAppVersion(formatVersionLabel(info)))
+      .catch(console.error);
   }, []);
 
   useEffect(() => {

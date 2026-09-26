@@ -105,6 +105,9 @@ async function createPlatform(root: string) {
     async getAppVersion() {
       return "0.1.0";
     },
+    async getBuildInfo() {
+      return { version: "0.1.0", commit: "" };
+    },
     async kvGetItem() {
       return null;
     },

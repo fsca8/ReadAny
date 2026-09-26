@@ -24,6 +24,7 @@ function createPlatform(fetchImpl: IPlatformService["fetch"]): IPlatformService 
     fetch: fetchImpl,
     createWebSocket: vi.fn(),
     getAppVersion: vi.fn(),
+    getBuildInfo: vi.fn(async () => ({ version: "0.1.0", commit: "" })),
     kvGetItem: vi.fn(),
     kvSetItem: vi.fn(),
     kvRemoveItem: vi.fn(),

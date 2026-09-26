@@ -7,6 +7,7 @@
  * All Tauri imports are dynamic so the module graph stays clean in SSR/test contexts.
  */
 import type {
+  BuildInfo,
   FileTransferOptions,
   FetchOptions,
   FilePickerOptions,
@@ -325,6 +326,15 @@ export class TauriPlatformService implements IPlatformService {
   async getAppVersion(): Promise<string> {
     const { getVersion } = await import("@tauri-apps/api/app");
     return getVersion();
+  }
+
+  /**
+   * Commit hash baked into the bundle by vite at build time (see
+   * `__READANY_COMMIT__` in vite.config.ts) — the label therefore matches the
+   * installer filename the build produced (`ReadAny_1.4.1+<hash>_x64-setup.exe`).
+   */
+  async getBuildInfo(): Promise<BuildInfo> {
+    return { version: await this.getAppVersion(), commit: __READANY_COMMIT__ };
   }
 
   // ---- Update ----

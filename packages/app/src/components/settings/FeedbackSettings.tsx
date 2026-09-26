@@ -37,7 +37,7 @@ import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import i18n from "i18next";
-import { getVersion } from "@tauri-apps/api/app";
+import { formatVersionLabel, getPlatformService } from "@readany/core/services";
 
 const FEEDBACK_TYPES: {
   key: FeedbackType;
@@ -80,7 +80,12 @@ export function FeedbackSettings() {
 
   const [appVersion, setAppVersion] = useState("...");
   useEffect(() => {
-    getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
+    // Feedback payload records the full build label (version + commit hash) so a
+    // reported issue can be traced back to the exact code.
+    getPlatformService()
+      .getBuildInfo()
+      .then((info) => setAppVersion(formatVersionLabel(info)))
+      .catch(() => setAppVersion("unknown"));
   }, []);
 
   const deviceInfo: DeviceInfo = useMemo(() => {

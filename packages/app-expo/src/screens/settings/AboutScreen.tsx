@@ -1,4 +1,4 @@
-import { getPlatformService } from "@readany/core/services";
+import { formatVersionLabel, getPlatformService } from "@readany/core/services";
 import { checkForUpdate } from "@readany/core/update";
 import { useResponsiveLayout } from "@/hooks/use-responsive-layout";
 import { useCallback, useEffect, useState } from "react";
@@ -54,7 +54,12 @@ export default function AboutScreen() {
   const showDialog = useUpdateStore((s) => s.showDialog);
 
   useEffect(() => {
-    getPlatformService().getAppVersion().then(setVersion);
+    // Shows version + commit hash (e.g. "1.4.1+991640b2"), matching the APK
+    // filename this build produced.
+    getPlatformService()
+      .getBuildInfo()
+      .then((info) => setVersion(formatVersionLabel(info)))
+      .catch(() => setVersion("unknown"));
   }, []);
 
   const handleCheckUpdate = useCallback(async () => {

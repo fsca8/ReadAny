@@ -1,4 +1,28 @@
 const { getAppVariantConfig } = require("./scripts/app-variant");
+const { execSync } = require("node:child_process");
+
+/**
+ * Short commit hash of the code being bundled, so the app can display and report
+ * which build it is (see src/lib/build-info.ts). `-dirty` marks a bundle made
+ * from a modified working tree, `dev` is the fallback outside a git checkout.
+ */
+function readCommitHash() {
+  try {
+    const hash = execSync("git rev-parse --short HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+    const dirty = execSync("git status --porcelain", {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+    return dirty ? `${hash}-dirty` : hash;
+  } catch {
+    return "dev";
+  }
+}
 
 const variant = getAppVariantConfig();
 
@@ -95,6 +119,7 @@ module.exports = {
     scheme: variant.scheme,
     extra: {
       appVariant: variant.key,
+      commitHash: readCommitHash(),
       eas: {
         projectId: "e9c65825-d965-4d58-a3af-46406ee8a9ae",
       },
