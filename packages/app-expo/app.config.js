@@ -3,8 +3,9 @@ const { execSync } = require("node:child_process");
 
 /**
  * Short commit hash of the code being bundled, so the app can display and report
- * which build it is (see src/lib/build-info.ts). `-dirty` marks a bundle made
- * from a modified working tree, `dev` is the fallback outside a git checkout.
+ * which build it is (see src/lib/build-info.ts). `-dirty` marks a bundle whose
+ * tracked files differ from that commit (untracked build output such as release/
+ * or .hermes/ does not count), `dev` is the fallback outside a git checkout.
  */
 function readCommitHash() {
   try {
@@ -13,7 +14,7 @@ function readCommitHash() {
     })
       .toString()
       .trim();
-    const dirty = execSync("git status --porcelain", {
+    const dirty = execSync("git status --porcelain --untracked-files=no", {
       stdio: ["ignore", "pipe", "ignore"],
     })
       .toString()

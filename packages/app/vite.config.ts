@@ -12,8 +12,9 @@ const pdfjsDist = path.resolve(__dirname, "../../node_modules/pdfjs-dist");
  * Short commit hash baked into the bundle so the running app can show (and
  * report) exactly which code it is — see `getBuildInfo` in
  * src/lib/platform/tauri-platform-service.ts. Reads the same value the release
- * script puts in the artifact name; `-dirty` marks builds made from a modified
- * working tree, and `dev` is the fallback outside a git checkout.
+ * script puts in the artifact name; `-dirty` marks builds whose tracked files
+ * differ from that commit (untracked build output such as release/ or .hermes/
+ * does not count), and `dev` is the fallback outside a git checkout.
  */
 function readCommitHash(): string {
   try {
@@ -23,7 +24,7 @@ function readCommitHash(): string {
     })
       .toString()
       .trim();
-    const dirty = execSync("git status --porcelain", {
+    const dirty = execSync("git status --porcelain --untracked-files=no", {
       cwd: __dirname,
       stdio: ["ignore", "pipe", "ignore"],
     })
