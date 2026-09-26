@@ -6,15 +6,63 @@
 //! thread, which froze the whole app during library sync.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use tauri::ipc::Channel;
 use tauri_plugin_http::reqwest;
 
-const TRANSFER_TIMEOUT_SECS: u64 = 300;
+/// Floor for a transfer's total budget. Requests without a size hint (and every
+/// small payload: sync JSONs, covers) keep the historical 5-minute cap.
+const TRANSFER_TIMEOUT_FLOOR_SECS: u64 = 300;
+/// Worst-case throughput we are willing to wait out before calling a transfer
+/// dead. A 100 MiB book therefore gets floor + ~53 min instead of a flat 5 min.
+const TRANSFER_MIN_RATE_BYTES_PER_SEC: u64 = 32 * 1024;
+/// Hard ceiling so a pathological size never yields an unbounded wait.
+const TRANSFER_TIMEOUT_CEIL_SECS: u64 = 3 * 60 * 60;
+/// Idle guard: a single stalled read (no bytes for this long) aborts the
+/// transfer. This is what keeps "no total timeout" downloads bounded.
+const TRANSFER_IDLE_TIMEOUT_SECS: u64 = 120;
+/// Establishing the connection should fail fast (unreachable host / wrong port).
+const CONNECT_TIMEOUT_SECS: u64 = 15;
 
-fn build_client(allow_insecure: Option<bool>) -> Result<reqwest::Client, String> {
+/// Total request budget for a transfer carrying `payload_bytes`.
+///
+/// WHY (2026-09-26 incident): this used to be a flat `timeout(300s)`. reqwest's
+/// client timeout covers the whole exchange including the request body, so a
+/// book that needed more than 5 minutes to upload was aborted *mid-body*. The
+/// server (pfm) saw a truncated PUT — `write staging: unexpected EOF` → HTTP 500
+/// — and sync retried the same file forever: 3 books, 16 failed attempts, every
+/// single one cut at ~5 minutes, while smaller books finished in seconds.
+/// A size-aware budget lets slow-but-progressing transfers finish.
+fn transfer_budget(payload_bytes: Option<u64>) -> Duration {
+    let secs = match payload_bytes {
+        Some(bytes) if bytes > 0 => {
+            let needed = bytes / TRANSFER_MIN_RATE_BYTES_PER_SEC;
+            TRANSFER_TIMEOUT_FLOOR_SECS
+                .saturating_add(needed)
+                .min(TRANSFER_TIMEOUT_CEIL_SECS)
+        }
+        _ => TRANSFER_TIMEOUT_FLOOR_SECS,
+    };
+    Duration::from_secs(secs)
+}
+
+/// Build an HTTP client for a transfer.
+///
+/// - `budget: Some(d)` — total wall-clock cap (uploads: size-aware, see
+///   [`transfer_budget`]).
+/// - `budget: None` — no total cap; the per-read idle guard
+///   (`read_timeout`) is what bounds it. Used for downloads, whose size is not
+///   known before the response headers arrive: a large book must not be killed
+///   by a fixed total, and a stalled one still aborts within
+///   [`TRANSFER_IDLE_TIMEOUT_SECS`].
+fn build_client(allow_insecure: Option<bool>, budget: Option<Duration>) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(TRANSFER_TIMEOUT_SECS));
+        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
+        .read_timeout(Duration::from_secs(TRANSFER_IDLE_TIMEOUT_SECS));
+    if let Some(budget) = budget {
+        builder = builder.timeout(budget);
+    }
     if allow_insecure.unwrap_or(false) {
         builder = builder
             .danger_accept_invalid_certs(true)
@@ -103,10 +151,12 @@ pub async fn webdav_upload_file(
     headers: HashMap<String, String>,
     allow_insecure: Option<bool>,
 ) -> Result<(), String> {
-    let client = build_client(allow_insecure)?;
     let data = tokio::fs::read(&file_path)
         .await
         .map_err(|e| format!("failed to read {file_path}: {e}"))?;
+    // Size-aware budget: the whole body must fit inside the client timeout,
+    // otherwise reqwest aborts mid-upload and the server sees a truncated PUT.
+    let client = build_client(allow_insecure, Some(transfer_budget(Some(data.len() as u64))))?;
     send_with_retry(
         &client,
         reqwest::Method::PUT,
@@ -128,7 +178,10 @@ pub async fn webdav_download_file(
     allow_insecure: Option<bool>,
     on_progress: Channel<TransferProgress>,
 ) -> Result<(), String> {
-    let client = build_client(allow_insecure)?;
+    // No total timeout for downloads: the payload size is unknown until the
+    // response headers arrive, and a large book must not be killed by a fixed
+    // cap. `read_timeout` (see build_client) aborts a stalled transfer instead.
+    let client = build_client(allow_insecure, None)?;
     let mut response = send_with_retry(
         &client,
         reqwest::Method::GET,
@@ -170,4 +223,50 @@ pub async fn webdav_download_file(
             .map_err(|e| format!("download flush failed: {e}"))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for the 2026-09-26 incident: a flat 300s client timeout cut
+    /// large uploads off mid-body, the server saw a truncated PUT (HTTP 500),
+    /// and sync retried the same books forever.
+    #[test]
+    fn budget_keeps_floor_for_tiny_or_unknown_payloads() {
+        assert_eq!(
+            transfer_budget(None),
+            Duration::from_secs(TRANSFER_TIMEOUT_FLOOR_SECS)
+        );
+        assert_eq!(
+            transfer_budget(Some(0)),
+            Duration::from_secs(TRANSFER_TIMEOUT_FLOOR_SECS)
+        );
+        // Smaller than one second of worst-case throughput → still the floor.
+        assert_eq!(
+            transfer_budget(Some(TRANSFER_MIN_RATE_BYTES_PER_SEC - 1)),
+            Duration::from_secs(TRANSFER_TIMEOUT_FLOOR_SECS)
+        );
+    }
+
+    #[test]
+    fn budget_grows_with_payload_size() {
+        // 1 MiB → floor + 32s (1 MiB / 32 KiB per second).
+        assert_eq!(
+            transfer_budget(Some(1024 * 1024)),
+            Duration::from_secs(TRANSFER_TIMEOUT_FLOOR_SECS + 32)
+        );
+        // 100 MiB → floor + 3200s, i.e. no longer a 5-minute cap.
+        let budget = transfer_budget(Some(100 * 1024 * 1024));
+        assert_eq!(budget, Duration::from_secs(TRANSFER_TIMEOUT_FLOOR_SECS + 3200));
+        assert!(budget > Duration::from_secs(TRANSFER_TIMEOUT_FLOOR_SECS));
+    }
+
+    #[test]
+    fn budget_is_capped() {
+        assert_eq!(
+            transfer_budget(Some(u64::MAX / 2)),
+            Duration::from_secs(TRANSFER_TIMEOUT_CEIL_SECS)
+        );
+    }
 }

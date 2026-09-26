@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type FetchOptions, type IPlatformService, setPlatformService } from "../services/platform";
-import { WebDavClient, sanitizeWebDavRemoteRoot } from "./webdav-client";
+import { WebDavClient, sanitizeWebDavRemoteRoot, transferBudgetMs } from "./webdav-client";
 
 function installFetchStub(
   handler: (url: string, options?: FetchOptions) => Response | Promise<Response>,
@@ -363,5 +363,66 @@ describe("sanitizeWebDavRemoteRoot", () => {
 
   it("trims unsafe path noise without lowercasing user folders", () => {
     expect(sanitizeWebDavRemoteRoot(" /\u0000ReadAny//Sync/ ")).toBe("ReadAny/Sync");
+  });
+});
+
+/**
+ * Regression for the 2026-09-26 incident: a flat 5-minute transfer budget cut
+ * large book uploads off mid-body. The server (pfm) received a truncated PUT,
+ * answered 500 (`write staging: unexpected EOF`), and sync retried the same
+ * books forever — 3 books, 16 attempts, every one cut at ~5 minutes while
+ * smaller books finished in seconds.
+ */
+describe("WebDAV transfer budgets", () => {
+  afterEach(() => {
+    setPlatformService(null as unknown as IPlatformService);
+  });
+
+  function captureFetchCalls(): Array<{ url: string; options?: FetchOptions }> {
+    const calls: Array<{ url: string; options?: FetchOptions }> = [];
+    installFetchStub((url, options) => {
+      calls.push({ url, options });
+      // 204 is a null-body status: the Response constructor rejects a body here.
+      return new Response(null, { status: 204 });
+    });
+    return calls;
+  }
+
+  it("keeps the 5-minute floor for small payloads", async () => {
+    const calls = captureFetchCalls();
+    const client = new WebDavClient("https://dav.example.com/dav/readany", "alice", "secret");
+
+    await client.putJSON("/sync/index.json", { ok: true });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].options?.timeoutMs).toBe(300_000);
+  });
+
+  it("scales the PUT budget with the payload size", async () => {
+    const calls = captureFetchCalls();
+    const client = new WebDavClient("https://dav.example.com/dav/readany", "alice", "secret");
+
+    // 8 MiB at the worst-case rate (32 KiB/s) needs 256s on top of the floor.
+    await client.put("/data/books/big.epub", new Uint8Array(8 * 1024 * 1024));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].options?.timeoutMs).toBe(300_000 + 256_000);
+  });
+
+  it("asks platforms to abort a stalled transfer via the idle guard", async () => {
+    const calls = captureFetchCalls();
+    const client = new WebDavClient("https://dav.example.com/dav/readany", "alice", "secret");
+
+    await client.put("/sync/index.json", "{}", "application/json");
+
+    expect(calls[0].options?.idleTimeoutMs).toBe(120_000);
+  });
+
+  it("clamps the budget: floor for unknown sizes, ceiling for absurd ones", () => {
+    expect(transferBudgetMs(undefined)).toBe(300_000);
+    expect(transferBudgetMs(0)).toBe(300_000);
+    // The mobile buffered-transfer cap (16 MiB) is the largest GET payload.
+    expect(transferBudgetMs(16 * 1024 * 1024)).toBe(300_000 + 512_000);
+    expect(transferBudgetMs(Number.MAX_SAFE_INTEGER)).toBe(3 * 60 * 60 * 1000);
   });
 });
