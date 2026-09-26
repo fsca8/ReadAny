@@ -19,8 +19,15 @@ const TRANSFER_TIMEOUT_FLOOR_SECS: u64 = 300;
 const TRANSFER_MIN_RATE_BYTES_PER_SEC: u64 = 32 * 1024;
 /// Hard ceiling so a pathological size never yields an unbounded wait.
 const TRANSFER_TIMEOUT_CEIL_SECS: u64 = 3 * 60 * 60;
-/// Idle guard: a single stalled read (no bytes for this long) aborts the
-/// transfer. This is what keeps "no total timeout" downloads bounded.
+/// Idle guard used by the DOWNLOAD client only: a single stalled body read (no
+/// bytes for this long) aborts the transfer, which is what lets downloads run
+/// without a total cap.
+///
+/// Must NOT be applied to uploads: reqwest polls its read timeout while awaiting
+/// the response (see `PendingRequest::poll` in reqwest 0.12), and a server only
+/// answers a PUT once the whole body has arrived — so a read timeout on an upload
+/// silently becomes an upload deadline. That is exactly how the first iteration of
+/// this fix re-broke long uploads (every book cut at 120s).
 const TRANSFER_IDLE_TIMEOUT_SECS: u64 = 120;
 /// Establishing the connection should fail fast (unreachable host / wrong port).
 const CONNECT_TIMEOUT_SECS: u64 = 15;
@@ -47,28 +54,37 @@ fn transfer_budget(payload_bytes: Option<u64>) -> Duration {
     Duration::from_secs(secs)
 }
 
-/// Build an HTTP client for a transfer.
-///
-/// - `budget: Some(d)` — total wall-clock cap (uploads: size-aware, see
-///   [`transfer_budget`]).
-/// - `budget: None` — no total cap; the per-read idle guard
-///   (`read_timeout`) is what bounds it. Used for downloads, whose size is not
-///   known before the response headers arrive: a large book must not be killed
-///   by a fixed total, and a stalled one still aborts within
-///   [`TRANSFER_IDLE_TIMEOUT_SECS`].
-fn build_client(allow_insecure: Option<bool>, budget: Option<Duration>) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
-        .read_timeout(Duration::from_secs(TRANSFER_IDLE_TIMEOUT_SECS));
-    if let Some(budget) = budget {
-        builder = builder.timeout(budget);
-    }
+/// Shared client options for both transfer directions.
+fn base_builder(allow_insecure: Option<bool>) -> reqwest::ClientBuilder {
+    let mut builder =
+        reqwest::Client::builder().connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS));
     if allow_insecure.unwrap_or(false) {
         builder = builder
             .danger_accept_invalid_certs(true)
             .danger_accept_invalid_hostnames(true);
     }
     builder
+}
+
+/// Client for uploads: a size-aware total budget, and deliberately NO read
+/// timeout (a read timeout would fire while waiting for the response, i.e. while
+/// the body is still uploading — see [`TRANSFER_IDLE_TIMEOUT_SECS`]).
+fn build_upload_client(
+    allow_insecure: Option<bool>,
+    payload_bytes: u64,
+) -> Result<reqwest::Client, String> {
+    base_builder(allow_insecure)
+        .timeout(transfer_budget(Some(payload_bytes)))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))
+}
+
+/// Client for downloads: no total budget (the payload size is unknown until the
+/// response headers arrive, and a large book must not be killed by a fixed cap),
+/// bounded instead by the per-read idle guard.
+fn build_download_client(allow_insecure: Option<bool>) -> Result<reqwest::Client, String> {
+    base_builder(allow_insecure)
+        .read_timeout(Duration::from_secs(TRANSFER_IDLE_TIMEOUT_SECS))
         .build()
         .map_err(|e| format!("failed to build HTTP client: {e}"))
 }
@@ -156,7 +172,7 @@ pub async fn webdav_upload_file(
         .map_err(|e| format!("failed to read {file_path}: {e}"))?;
     // Size-aware budget: the whole body must fit inside the client timeout,
     // otherwise reqwest aborts mid-upload and the server sees a truncated PUT.
-    let client = build_client(allow_insecure, Some(transfer_budget(Some(data.len() as u64))))?;
+    let client = build_upload_client(allow_insecure, data.len() as u64)?;
     send_with_retry(
         &client,
         reqwest::Method::PUT,
@@ -180,8 +196,8 @@ pub async fn webdav_download_file(
 ) -> Result<(), String> {
     // No total timeout for downloads: the payload size is unknown until the
     // response headers arrive, and a large book must not be killed by a fixed
-    // cap. `read_timeout` (see build_client) aborts a stalled transfer instead.
-    let client = build_client(allow_insecure, None)?;
+    // cap. `read_timeout` (see build_download_client) aborts a stalled transfer.
+    let client = build_download_client(allow_insecure)?;
     let mut response = send_with_retry(
         &client,
         reqwest::Method::GET,

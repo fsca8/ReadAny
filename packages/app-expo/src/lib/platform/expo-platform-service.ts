@@ -385,8 +385,9 @@ export class ExpoPlatformService implements IPlatformService {
       // Every upload/download progress event resets it, so a slow-but-alive
       // transfer keeps running while a stalled one fails fast instead of burning
       // the whole (size-aware) total budget.
+      let sawProgress = false;
       const touchIdleTimer = () => {
-        if (!idleTimeoutMs || idleTimeoutMs <= 0) return;
+        if (!idleTimeoutMs || idleTimeoutMs <= 0 || !sawProgress) return;
         clearIdleTimer();
         idleTimer = setTimeout(() => {
           if (settled) return;
@@ -406,14 +407,23 @@ export class ExpoPlatformService implements IPlatformService {
         }, idleTimeoutMs);
       };
 
+      // The guard only arms once bytes have actually moved. A request shape that
+      // never reports progress would otherwise be aborted at the idle deadline
+      // instead of being governed by the total budget — the desktop path's
+      // reqwest read timeout taught exactly that lesson.
+      const noteProgress = () => {
+        sawProgress = true;
+        touchIdleTimer();
+      };
+
       xhr.open(method, url, true);
       xhr.responseType = responseType;
       xhr.timeout = timeoutMs;
 
       // Progress tracking — also feeds the idle guard.
-      xhr.upload.onprogress = () => touchIdleTimer();
+      xhr.upload.onprogress = () => noteProgress();
       xhr.onprogress = (event) => {
-        touchIdleTimer();
+        noteProgress();
         onDownloadProgress?.(event.loaded, event.lengthComputable ? event.total : 0);
       };
 
@@ -523,9 +533,7 @@ export class ExpoPlatformService implements IPlatformService {
         reject(new Error(`XHR request timeout (${timeoutMs}ms): ${method} ${url}`));
       };
 
-      // Send request (idle guard starts here: the transfer is about to move
-      // bytes, and every progress event refreshes the deadline).
-      touchIdleTimer();
+      // Send request (the idle guard arms on the first progress event).
       if (options?.body) {
         if (typeof options.body === "string") {
           xhr.send(options.body);
