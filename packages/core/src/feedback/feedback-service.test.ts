@@ -7,6 +7,7 @@ import {
   clearLogs,
   collectLogs,
   listLogFiles,
+  logDisplayLines,
   logFileDate,
   readLogFile,
 } from "./feedback-service";
@@ -244,5 +245,22 @@ describe("log file listing and reading", () => {
     const files = await listLogFiles();
 
     expect(files.map((file) => file.name)).toEqual(["app-2026-09-26.log"]);
+  });
+});
+
+describe("log display order", () => {
+  it("keeps file order and drops the trailing blank line", () => {
+    expect(logDisplayLines("a\nb\nc\n")).toEqual(["a", "b", "c"]);
+    expect(logDisplayLines("a\nb")).toEqual(["a", "b"]);
+    expect(logDisplayLines("")).toEqual([]);
+  });
+
+  it("puts the newest line first when asked", () => {
+    // Watching a log that grows at the bottom: the tail is the interesting end.
+    expect(logDisplayLines("oldest\nmiddle\nnewest\n", { newestFirst: true })).toEqual([
+      "newest",
+      "middle",
+      "oldest",
+    ]);
   });
 });

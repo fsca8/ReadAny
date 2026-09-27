@@ -220,6 +220,21 @@ export async function readLogFile(name: string): Promise<string> {
 }
 
 /**
+ * Split a log file's text into display lines.
+ *
+ * Log files end with a newline, so the naive split leaves a trailing empty string;
+ * that is dropped here, otherwise reversing would surface a blank first line. With
+ * `newestFirst` the newest line comes first, which is what you want when watching a
+ * growing log: the interesting end is at the top instead of a scroll away.
+ */
+export function logDisplayLines(text: string, options?: { newestFirst?: boolean }): string[] {
+  if (!text) return [];
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return options?.newestFirst ? lines.reverse() : lines;
+}
+
+/**
  * Delete log files older than LOG_MAX_DAYS.
  *
  * Enumerates the directory instead of probing a fixed set of date offsets. The

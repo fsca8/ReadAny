@@ -24,6 +24,7 @@ export {
   getUnreadFeedbackCount,
   installFeedbackLogCapture,
   listLogFiles,
+  logDisplayLines,
   markFeedbackReplySeen,
   readLogFile,
   refreshAndCountUnreadFeedback,

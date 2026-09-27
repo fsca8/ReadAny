@@ -15,6 +15,7 @@ import {
   type LogFileEntry,
   getLogDirectoryPath,
   listLogFiles,
+  logDisplayLines,
   readLogFile,
 } from "@readany/core/feedback";
 import { getPlatformService } from "@readany/core/services";
@@ -41,6 +42,9 @@ export function LogsSettings() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [onlySync, setOnlySync] = useState(false);
+  // Newest line on top by default: the tail of a growing log is what you look at,
+  // and the file can be thousands of lines long.
+  const [newestFirst, setNewestFirst] = useState(true);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
 
   const load = useCallback(async (preferredName?: string | null) => {
@@ -85,7 +89,7 @@ export function LogsSettings() {
     }
   }, []);
 
-  const lines = useMemo(() => (content ? content.split("\n") : []), [content]);
+  const lines = useMemo(() => logDisplayLines(content, { newestFirst }), [content, newestFirst]);
   const visibleLines = useMemo(
     () => (onlySync ? filterSyncLines(lines.join("\n")) : lines),
     [lines, onlySync],
@@ -138,6 +142,15 @@ export function LogsSettings() {
         >
           {t("settings.syncLogCopy", { defaultValue: "复制全部" })}
         </button>
+        <label className="ml-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={newestFirst}
+            onChange={(event) => setNewestFirst(event.target.checked)}
+            className="h-3.5 w-3.5"
+          />
+          {t("settings.logsNewestFirst", { defaultValue: "最新在上" })}
+        </label>
         <label className="ml-1 flex items-center gap-1.5 text-xs text-muted-foreground">
           <input
             type="checkbox"

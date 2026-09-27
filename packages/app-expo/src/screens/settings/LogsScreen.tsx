@@ -16,6 +16,7 @@ import {
   type LogFileEntry,
   getLogDirectoryPath,
   listLogFiles,
+  logDisplayLines,
   readLogFile,
 } from "@readany/core/feedback";
 import { getPlatformService } from "@readany/core/services";
@@ -63,6 +64,9 @@ export default function LogsScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [onlySync, setOnlySync] = useState(false);
+  // Newest line on top by default: the tail of a growing log is what you look at,
+  // and the file can be thousands of lines long.
+  const [newestFirst, setNewestFirst] = useState(true);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
 
   const load = useCallback(async (preferredName?: string | null) => {
@@ -107,15 +111,13 @@ export default function LogsScreen() {
     }
   }, []);
 
-  const lines = useMemo(() => (content ? content.split("\n") : []), [content]);
-  const visibleText = useMemo(
-    () => (onlySync ? filterSyncLines(lines.join("\n")).join("\n") : content),
-    [content, lines, onlySync],
+  const lines = useMemo(() => logDisplayLines(content, { newestFirst }), [content, newestFirst]);
+  const visibleLines = useMemo(
+    () => (onlySync ? filterSyncLines(lines.join("\n")) : lines),
+    [lines, onlySync],
   );
-  const visibleLineCount = useMemo(
-    () => (visibleText ? visibleText.split("\n").length : 0),
-    [visibleText],
-  );
+  const visibleText = useMemo(() => visibleLines.join("\n"), [visibleLines]);
+  const visibleLineCount = visibleLines.length;
   const byteSize = useMemo(() => new TextEncoder().encode(content).byteLength, [content]);
 
   const copy = useCallback(async () => {
@@ -177,6 +179,15 @@ export default function LogsScreen() {
           >
             <Text style={s.secondaryBtnText}>
               {t("settings.syncLogCopy", { defaultValue: "复制全部" })}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[s.chip, newestFirst && s.chipActive]}
+            onPress={() => setNewestFirst((prev) => !prev)}
+            activeOpacity={0.7}
+          >
+            <Text style={[s.chipText, newestFirst && s.chipTextActive]}>
+              {t("settings.logsNewestFirst", { defaultValue: "最新在上" })}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
