@@ -169,6 +169,22 @@ class FakePerBookDb {
       return [...acc].map(([book_id, max_ts]) => ({ book_id, max_ts })) as T[];
     }
 
+    const tombstoneMarkerGroups = normalized.match(
+      /^SELECT t\.book_id AS book_id, MAX\(t\.deleted_at\) AS max_ts FROM sync_tombstones t WHERE t\.table_name = '(\w+)' AND t\.book_id IS NOT NULL AND NOT EXISTS \(SELECT 1 FROM \w+ WHERE id = t\.id\) GROUP BY t\.book_id$/,
+    );
+    if (tombstoneMarkerGroups) {
+      const table = tombstoneMarkerGroups[1];
+      const acc = new Map<string, number>();
+      for (const row of this.tombstones.values()) {
+        if (row.table_name !== table) continue;
+        if (row.book_id === null || row.book_id === undefined) continue;
+        if (this.table(table).has(String(row.id))) continue;
+        const bookId = String(row.book_id);
+        acc.set(bookId, Math.max(acc.get(bookId) ?? 0, Number(row.deleted_at ?? 0)));
+      }
+      return [...acc].map(([book_id, max_ts]) => ({ book_id, max_ts })) as T[];
+    }
+
     const tombstonesForBook = normalized.match(
       /^SELECT t\.id, t\.deleted_at FROM sync_tombstones t WHERE t\.book_id = \? AND t\.table_name = '(\w+)' AND NOT EXISTS \(SELECT 1 FROM \w+ WHERE id = t\.id\)$/,
     );
@@ -231,6 +247,31 @@ class FakePerBookDb {
         deleted_at: Number(deletedAt),
         device_id: String(deviceId),
         book_id: bookId === null || bookId === undefined ? null : String(bookId),
+      });
+      return;
+    }
+
+    // Monotonic remote-tombstone upsert (never moves deleted_at backwards).
+    if (
+      normalized.startsWith(
+        "INSERT INTO sync_tombstones (id, table_name, deleted_at, device_id, book_id) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id, table_name) DO UPDATE SET",
+      )
+    ) {
+      const [id, tableName, deletedAt, deviceId, bookId] = params;
+      const key = `${String(tableName)}:${String(id)}`;
+      const existing = this.tombstones.get(key);
+      const previous = Number(existing?.deleted_at ?? 0);
+      const next = Math.max(previous, Number(deletedAt));
+      const fromRemote = Number(deletedAt) >= previous;
+      this.tombstones.set(key, {
+        id: String(id),
+        table_name: String(tableName),
+        deleted_at: next,
+        device_id: fromRemote ? String(deviceId) : String(existing?.device_id ?? deviceId),
+        book_id:
+          bookId === null || bookId === undefined
+            ? (existing?.book_id ?? null)
+            : String(bookId),
       });
       return;
     }
@@ -324,6 +365,7 @@ function seedBook(db: FakePerBookDb, id: string, updatedAt: number, title = "Boo
 const T1 = 1_700_000_000_000;
 const T2 = T1 + 60_000;
 const T3 = T1 + 120_000;
+const T4 = T1 + 180_000;
 
 describe("runPerBookSync (per-book cloud engine)", () => {
   let db: FakePerBookDb;
@@ -539,6 +581,169 @@ describe("runPerBookSync (per-book cloud engine)", () => {
     });
   });
 
+  it("uploads the tombstone map when a book's annotations were deleted locally", async () => {
+    seedBook(db, "book-1", T2);
+    // hl-1 is gone locally — only its tombstone survives.
+    db.tombstones.set("highlights:hl-1", {
+      id: "hl-1",
+      table_name: "highlights",
+      deleted_at: T3,
+      device_id: "device-a",
+      book_id: "book-1",
+    });
+
+    const backend = new FakeBackend({
+      "/readany/sync/index.json": {
+        schemaVersion: 2,
+        updatedAt: T2,
+        books: { "book-1": { b: T2, a: T2 } },
+        threads: {},
+      },
+      "/readany/sync/books/book-1.json": {
+        schemaVersion: 1,
+        bookId: "book-1",
+        book: { id: "book-1", title: "Book", updated_at: T2 },
+        highlights: [{ id: "hl-1", book_id: "book-1", text: "deleted", updated_at: T2 }],
+        notes: [],
+        bookmarks: [],
+        writerDeviceId: "device-b",
+        updatedAt: T2,
+      },
+    });
+
+    const result = await runPerBookSync(backend);
+
+    expect(result.success).toBe(true);
+    const pushed = backend.files.get("/readany/sync/books/book-1.json") as {
+      highlights: Row[];
+      deleted: { highlights: Record<string, number> };
+    };
+    // The deleted row must not travel, the deletion must.
+    expect(pushed.highlights).toEqual([]);
+    expect(pushed.deleted.highlights).toEqual({ "hl-1": T3 });
+    expect(backend.files.get("/readany/sync/index.json")).toMatchObject({
+      books: { "book-1": { a: T3 } },
+    });
+    // The stale remote row must not be pulled back either.
+    expect(db.table("highlights").has("hl-1")).toBe(false);
+  });
+
+  it("does not resurrect a locally deleted annotation when pulling a stale book file", async () => {
+    seedBook(db, "book-1", T2);
+    db.insert("highlights", { id: "hl-keep", book_id: "book-1", text: "keep", updated_at: T2 });
+    // hl-gone was deleted here, then a peer's later push carried the index past
+    // our tombstone — the pull must not bring the row back.
+    db.tombstones.set("highlights:hl-gone", {
+      id: "hl-gone",
+      table_name: "highlights",
+      deleted_at: T3,
+      device_id: "device-a",
+      book_id: "book-1",
+    });
+
+    const backend = new FakeBackend({
+      "/readany/sync/index.json": {
+        schemaVersion: 2,
+        updatedAt: T4,
+        books: { "book-1": { b: T3, a: T4 } },
+        threads: {},
+      },
+      "/readany/sync/books/book-1.json": {
+        schemaVersion: 1,
+        bookId: "book-1",
+        book: { id: "book-1", title: "Book", updated_at: T3 },
+        highlights: [
+          { id: "hl-gone", book_id: "book-1", text: "stale", updated_at: T2 },
+          { id: "hl-new", book_id: "book-1", text: "peer new", updated_at: T3 },
+        ],
+        notes: [],
+        bookmarks: [],
+        writerDeviceId: "device-b",
+        updatedAt: T3,
+      },
+    });
+
+    const result = await runPerBookSync(backend);
+
+    expect(result.success).toBe(true);
+    // The peer's newer rows still land…
+    expect(db.table("highlights").get("hl-new")?.text).toBe("peer new");
+    // …but our own deletion stays deleted.
+    expect(db.table("highlights").has("hl-gone")).toBe(false);
+  });
+
+  it("applies a remote annotation deletion and keeps it deleted locally", async () => {
+    seedBook(db, "book-1", T2);
+    db.insert("highlights", { id: "hl-1", book_id: "book-1", text: "peer deleted", updated_at: T2 });
+
+    const backend = new FakeBackend({
+      "/readany/sync/index.json": {
+        schemaVersion: 2,
+        updatedAt: T3,
+        books: { "book-1": { b: T2, a: T3 } },
+        threads: {},
+      },
+      "/readany/sync/books/book-1.json": {
+        schemaVersion: 1,
+        bookId: "book-1",
+        book: { id: "book-1", title: "Book", updated_at: T2 },
+        highlights: [],
+        notes: [],
+        bookmarks: [],
+        deleted: { highlights: { "hl-1": T3 } },
+        writerDeviceId: "device-b",
+        updatedAt: T3,
+      },
+    });
+
+    const result = await runPerBookSync(backend);
+
+    expect(result.success).toBe(true);
+    expect(db.table("highlights").has("hl-1")).toBe(false);
+    // Recorded locally, so a later stale push cannot resurrect it.
+    expect(db.tombstones.get("highlights:hl-1")?.deleted_at).toBe(T3);
+  });
+
+  it("does not re-upload a book whose deletions the remote already carries", async () => {
+    seedBook(db, "book-1", T2);
+    db.tombstones.set("highlights:hl-1", {
+      id: "hl-1",
+      table_name: "highlights",
+      deleted_at: T2,
+      device_id: "device-a",
+      book_id: "book-1",
+    });
+
+    const backend = new FakeBackend({
+      "/readany/sync/index.json": {
+        schemaVersion: 2,
+        updatedAt: T2,
+        books: { "book-1": { b: T2, a: T2 } },
+        threads: {},
+      },
+      "/readany/sync/books/book-1.json": {
+        schemaVersion: 1,
+        bookId: "book-1",
+        book: { id: "book-1", title: "Book", updated_at: T2 },
+        highlights: [],
+        notes: [],
+        bookmarks: [],
+        deleted: { highlights: { "hl-1": T2 } },
+        writerDeviceId: "device-b",
+        updatedAt: T2,
+      },
+    });
+    const putSpy = vi.spyOn(backend, "putJSON");
+
+    const result = await runPerBookSync(backend);
+
+    expect(result.success).toBe(true);
+    expect(putSpy).not.toHaveBeenCalledWith(
+      "/readany/sync/books/book-1.json",
+      expect.anything(),
+    );
+  });
+
   it("pulls chat day files past the cursor and advances the cursor", async () => {
     const backend = new FakeBackend({
       "/readany/sync/index.json": { schemaVersion: 2, updatedAt: T2, books: {}, threads: {} },
@@ -645,5 +850,73 @@ describe("runPerBookSync (per-book cloud engine)", () => {
 
     const reads = backend.jsonReads.filter((p) => p === "/readany/sync/chat/2026-09-05.json");
     expect(reads).toHaveLength(1);
+  });
+
+  it("announces a local message deletion instead of resurrecting it from a day file", async () => {
+    // msg-1 was deleted here — only its tombstone survives.
+    db.tombstones.set("messages:msg-1", {
+      id: "msg-1",
+      table_name: "messages",
+      deleted_at: T3,
+      device_id: "device-a",
+      book_id: null,
+    });
+
+    const backend = new FakeBackend({
+      "/readany/sync/index.json": { schemaVersion: 2, updatedAt: T2, books: {}, threads: {} },
+      "/readany/sync/chat/2026-09-05.json": {
+        schemaVersion: 1,
+        date: "2026-09-05",
+        messages: [{ id: "msg-1", thread_id: "th-1", content: "deleted", created_at: T1 }],
+        updatedAt: T2,
+      },
+    });
+
+    const result = await runPerBookSync(backend);
+
+    expect(result.success).toBe(true);
+    // The day file that still lists the row must not bring it back.
+    expect(db.table("messages").has("msg-1")).toBe(false);
+
+    // The deletion travels in the day file of the deletion moment, with no row
+    // shipped next to it.
+    const announced = [...backend.files.entries()].find(([path, file]) => {
+      if (!path.startsWith("/readany/sync/chat/")) return false;
+      const deleted = (file as { deleted?: Record<string, number> }).deleted;
+      return deleted?.["msg-1"] === T3;
+    });
+    expect(announced).toBeTruthy();
+    expect((announced?.[1] as { messages: Row[] }).messages).toEqual([]);
+  });
+
+  it("applies remote profile rows and deletions, and never ships a deleted row back", async () => {
+    db.insert("tags", { id: "tag-local", name: "Local", updated_at: T1 });
+    db.insert("tags", { id: "tag-gone", name: "Gone", updated_at: T2 });
+
+    const backend = new FakeBackend({
+      "/readany/sync/index.json": { schemaVersion: 2, updatedAt: T2, books: {}, threads: {} },
+      "/readany/sync/profile/tags.json": {
+        schemaVersion: 1,
+        rows: [
+          { id: "tag-new", name: "New", updated_at: T2 },
+          { id: "tag-local", name: "Peer edit", updated_at: T3 },
+        ],
+        deleted: { "tag-gone": T3 },
+        updatedAt: T2,
+      },
+    });
+
+    const result = await runPerBookSync(backend);
+
+    expect(result.success).toBe(true);
+    // The peer's addition and edit land locally…
+    expect(db.table("tags").get("tag-new")?.name).toBe("New");
+    expect(db.table("tags").get("tag-local")?.name).toBe("Peer edit");
+    // …and so does its deletion.
+    expect(db.table("tags").has("tag-gone")).toBe(false);
+
+    // The deleted row must not be shipped back to the profile file.
+    const pushed = backend.files.get("/readany/sync/profile/tags.json") as { rows: Row[] };
+    expect(pushed.rows.map((row) => row.id).sort()).toEqual(["tag-local", "tag-new"]);
   });
 });
