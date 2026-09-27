@@ -107,6 +107,29 @@ describe("feedback log buffer", () => {
     expect(logs).toContain("[event:feedback.submit.start]");
     expect(logs).toContain('"type":"bug"');
   });
+
+  it("keeps lines whose flush failed and writes them on the next attempt", async () => {
+    // The flush timer starts at module init, before the platform service is
+    // registered, so its first ticks fail. Those lines have to survive until a later
+    // flush succeeds — dropping them is why the first seconds of every cold start
+    // were missing from the file.
+    const platform = createTestPlatform();
+    let writeFails = true;
+    const originalWrite = platform.writeTextFile.bind(platform);
+    platform.writeTextFile = async (path: string, content: string) => {
+      if (writeFails) throw new Error("EIO");
+      await originalWrite(path, content);
+    };
+    setPlatformService(platform);
+
+    appendLog("line logged before the log file was writable");
+    await collectLogs(); // this flush attempt fails
+
+    writeFails = false;
+    const logs = await collectLogs(); // the retry must carry the line through
+
+    expect(logs).toContain("line logged before the log file was writable");
+  });
 });
 
 describe("log cleanup", () => {

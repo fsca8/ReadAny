@@ -33,6 +33,12 @@ const LOG_DIR = "logs";
 const LOG_FLUSH_INTERVAL_MS = 3000; // Flush to file every 3 seconds
 const LOG_MAX_DAYS = 7; // Keep 7 days of logs
 /**
+ * Safety valve for the pending-line buffer: if writes keep failing (a full disk, or
+ * the platform service never showing up), keep the most recent lines instead of
+ * growing without bound.
+ */
+const LOG_PENDING_MAX_LINES = 20_000;
+/**
  * Tail-truncate the collected logs to this UTF-8 byte budget before
  * submission. Sits below the worker's MAX_BODY_BYTES with room for the
  * description (≤12_000 chars) + device info + JSON envelope, so a payload
@@ -77,7 +83,13 @@ async function getLogFilePath(dateStr?: string): Promise<string> {
 /** Flush pending log lines to file */
 async function flushLogs(): Promise<void> {
   if (_pendingLines.length === 0) return;
-  const lines = _pendingLines.join("");
+  // Swap the buffer out atomically — a concurrent flush must never see (and write)
+  // the same lines twice — but hold on to it: a failed write puts the lines back
+  // below instead of throwing them away. Dropping them is exactly how the first
+  // seconds of every cold start went missing: the flush timer starts at module init,
+  // before the platform service is registered, so its first ticks all fail.
+  const lines = _pendingLines;
+  const pending = lines.join("");
   _pendingLines = [];
 
   try {
@@ -92,9 +104,14 @@ async function flushLogs(): Promise<void> {
     } catch {
       // File may not exist yet
     }
-    await platform.writeTextFile(filePath, existing + lines);
+    await platform.writeTextFile(filePath, existing + pending);
   } catch {
-    // Non-fatal: if file write fails, logs are lost
+    // Requeue ahead of anything logged meanwhile so the next flush retries.
+    const restored = lines.concat(_pendingLines);
+    _pendingLines =
+      restored.length > LOG_PENDING_MAX_LINES
+        ? restored.slice(restored.length - LOG_PENDING_MAX_LINES)
+        : restored;
   }
 }
 
