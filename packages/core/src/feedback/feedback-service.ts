@@ -6,7 +6,7 @@
  */
 
 import { getDB } from "../db/db-core";
-import { getPlatformService } from "../services/platform";
+import { getPlatformService, waitForPlatformService } from "../services/platform";
 import type {
   DeviceInfo,
   FeedbackDetail,
@@ -231,7 +231,12 @@ export async function readLogFile(name: string): Promise<string> {
  */
 export async function cleanOldLogs(): Promise<void> {
   try {
-    const platform = getPlatformService();
+    // The startup cleanup runs at module init (installFeedbackLogCapture is called
+    // before setPlatformService in both apps), so wait for the service instead of
+    // throwing "PlatformService not initialized" — that throw made cleanup a silent
+    // no-op on every cold start, which is how files like app-2026-09-05.log
+    // survived a 7-day retention policy.
+    const platform = await waitForPlatformService();
     const dir = await ensureLogDir();
     const cutoff = new Date(Date.now() - LOG_MAX_DAYS * 24 * 60 * 60 * 1000)
       .toISOString()
