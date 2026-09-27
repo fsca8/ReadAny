@@ -13,6 +13,7 @@ import {
   MessageSquareIcon,
   PaletteIcon,
   PuzzleIcon,
+  ScrollTextIcon,
   Trash2Icon,
   TypeIcon,
   Volume2Icon,
@@ -82,6 +83,7 @@ type ProfileMenuRoute = Extract<
   | "Skills"
   | "VectorModelSettings"
   | "Feedback"
+  | "Logs"
   | "About"
 >;
 type ProfileMenuItem =
@@ -481,6 +483,11 @@ export function ProfileScreen() {
             label: t("feedback.title", "反馈建议"),
             route: "Feedback" as const,
             showDot: unreadFeedback > 0,
+          },
+          {
+            icon: ScrollTextIcon,
+            label: t("settings.logs", "日志"),
+            route: "Logs" as const,
           },
           {
             icon: HelpCircleIcon,

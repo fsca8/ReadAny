@@ -133,6 +133,93 @@ async function cleanOldLogsByDateProbe(
 }
 
 /**
+ * A log file on disk, as offered by the logs page.
+ */
+export interface LogFileEntry {
+  /** File name, e.g. "app-2026-09-27.log". */
+  name: string;
+  /** Date parsed from the name (YYYY-MM-DD); null when the name carries none. */
+  date: string | null;
+  /** Whether this is the file the running process writes to. */
+  isToday: boolean;
+}
+
+/** Absolute path of the directory holding the log files. */
+export async function getLogDirectoryPath(): Promise<string> {
+  await ensureLogDir();
+  return _logDirPath;
+}
+
+/**
+ * List every log file in the log directory, newest first.
+ *
+ * This backs a page that shows logs verbatim, so nothing is hidden here: rotated
+ * and legacy names (`app-2026-09-05.1.log`, `readany-….log`) and undated `.log`
+ * files are all included, and the newest line of defence against "why is this old
+ * file still here?" is simply being able to see it. Non-`.log` files are ignored.
+ */
+export async function listLogFiles(): Promise<LogFileEntry[]> {
+  const platform = getPlatformService();
+  // Don't lose the lines buffered in the last few seconds.
+  await flushLogs();
+  const dir = await ensureLogDir();
+
+  let names: string[] = [];
+  const listDir = platform.readDir?.bind(platform);
+  if (listDir) {
+    try {
+      names = await listDir(dir);
+    } catch (error) {
+      console.warn(`[Logs] cannot list ${dir}, falling back to date probing:`, error);
+    }
+  }
+  if (names.length === 0) {
+    // No readDir (older platform shims) or an empty listing: probe plausible names.
+    const now = Date.now();
+    for (let i = 0; i <= 30; i++) {
+      const dateStr = new Date(now - i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const path = await platform.joinPath(dir, `app-${dateStr}.log`);
+      try {
+        if (await platform.exists(path)) names.push(`app-${dateStr}.log`);
+      } catch {
+        // Ignore: a missing file is the normal case.
+      }
+    }
+  }
+
+  const today = getTodayDateStr();
+  return names
+    .filter((name) => name.toLowerCase().endsWith(".log"))
+    .map((name) => {
+      const date = logFileDate(name);
+      return { name, date, isToday: date === today };
+    })
+    .sort((a, b) => {
+      const byDate = (b.date ?? "").localeCompare(a.date ?? "");
+      return byDate !== 0 ? byDate : b.name.localeCompare(a.name);
+    });
+}
+
+/**
+ * Read one log file verbatim: no line filtering, no truncation, no redaction.
+ *
+ * `collectLogs()` exists for *sharing* logs (sanitized + tail-truncated); this is
+ * for looking at them locally, where the user asked for the raw file.
+ */
+export async function readLogFile(name: string): Promise<string> {
+  const platform = getPlatformService();
+  await flushLogs();
+  // Only allow a bare file name: the path is built from the log dir, so anything
+  // carrying a separator could reach outside it.
+  const bare = name.trim();
+  if (!bare || /[\\/]/.test(bare) || bare === "." || bare === "..") {
+    throw new Error(`Invalid log file name: ${name}`);
+  }
+  const dir = await getLogDirectoryPath();
+  return platform.readTextFile(await platform.joinPath(dir, bare));
+}
+
+/**
  * Delete log files older than LOG_MAX_DAYS.
  *
  * Enumerates the directory instead of probing a fixed set of date offsets. The

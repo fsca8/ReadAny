@@ -12,7 +12,6 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ConfigTransfer } from "./ConfigTransfer";
 import { LANSyncDialog } from "./LANSyncDialog";
-import { SyncDiagnosticsLog } from "./SyncDiagnosticsLog";
 
 type BackendType = "webdav" | "s3" | "lan";
 
@@ -1015,9 +1014,6 @@ export function SyncSettings() {
           )}
         </section>
       )}
-
-      {/* Diagnostic log tail — read-only, same panel as the mobile app */}
-      <SyncDiagnosticsLog />
 
       {/* Transfer sync config */}
       <section className="space-y-3 border-t pt-4">

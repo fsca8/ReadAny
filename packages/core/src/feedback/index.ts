@@ -9,6 +9,8 @@ export type {
   FeedbackType,
 } from "./feedback-types";
 
+export type { LogFileEntry } from "./feedback-service";
+
 export {
   appendLog,
   appendStructuredLog,
@@ -17,10 +19,13 @@ export {
   collectLogs,
   getFeedbackDetail,
   getFeedbackHistory,
+  getLogDirectoryPath,
   getRemainingSubmissions,
   getUnreadFeedbackCount,
   installFeedbackLogCapture,
+  listLogFiles,
   markFeedbackReplySeen,
+  readLogFile,
   refreshAndCountUnreadFeedback,
   refreshFeedbackStatus,
   setFeedbackWorkerUrl,

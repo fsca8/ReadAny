@@ -26,7 +26,6 @@ import { spacing, useColors } from "../../styles/theme";
 import { SettingsHeader } from "./SettingsHeader";
 import { LanSection } from "./sync/LanSection";
 import { S3Form } from "./sync/S3Form";
-import { SyncDiagnosticsLog } from "./sync/SyncDiagnosticsLog";
 import { WebDavForm } from "./sync/WebDavForm";
 import { makeStyles } from "./sync/sync-styles";
 
@@ -770,10 +769,6 @@ export default function SyncSettingsScreen() {
                 )}
               </View>
             )}
-
-            {/* Diagnostic log tail — read-only, lets the app report what sync saw
-                without adb (the log file is inside the app sandbox on Android). */}
-            <SyncDiagnosticsLog />
 
             {/* Transfer sync config */}
             <View style={[styles.section, { marginTop: spacing.lg }]}>

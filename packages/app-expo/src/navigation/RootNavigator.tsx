@@ -14,6 +14,7 @@ import AppearanceSettingsScreen from "@/screens/settings/AppearanceSettingsScree
 import FeedbackDetailScreen from "@/screens/settings/FeedbackDetailScreen";
 import FeedbackScreen from "@/screens/settings/FeedbackScreen";
 import FontSettingsScreen from "@/screens/settings/FontSettingsScreen";
+import LogsScreen from "@/screens/settings/LogsScreen";
 import SyncSettingsScreen from "@/screens/settings/SyncSettingsScreen";
 import TTSSettingsScreen from "@/screens/settings/TTSSettingsScreen";
 import TranslationSettingsScreen from "@/screens/settings/TranslationSettingsScreen";
@@ -43,6 +44,7 @@ export type RootStackParamList = {
   SyncSettings: undefined;
   About: undefined;
   Feedback: undefined;
+  Logs: undefined;
   FeedbackDetail: { issueNumber: number; title: string };
   FullScreenNotes: { bookId: string; cfi?: string; chapterTitle?: string };
   FontSettings: undefined;
@@ -108,6 +110,7 @@ export function RootNavigator() {
             <Stack.Screen name="SyncSettings" component={SyncSettingsScreen} />
             <Stack.Screen name="About" component={AboutScreen} />
             <Stack.Screen name="Feedback" component={FeedbackScreen} />
+            <Stack.Screen name="Logs" component={LogsScreen} />
             <Stack.Screen
               name="FeedbackDetail"
               component={FeedbackDetailScreen}
