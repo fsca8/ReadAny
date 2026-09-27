@@ -174,7 +174,7 @@ describe("highlight-queries", () => {
   describe("getHighlightStats", () => {
     it("returns aggregated statistics", async () => {
       mockSelect
-        .mockResolvedValueOnce([{ count: 10 }]) // total
+        .mockResolvedValueOnce([{ count: 10 }]) // highlights without notes
         .mockResolvedValueOnce([{ count: 3 }]) // with notes
         .mockResolvedValueOnce([{ count: 5 }]) // distinct books
         .mockResolvedValueOnce([
@@ -185,11 +185,15 @@ describe("highlight-queries", () => {
         .mockResolvedValueOnce([{ count: 2 }]); // recent
 
       const stats = await getHighlightStats();
-      expect(stats.totalHighlights).toBe(10);
+      expect(stats.highlightsOnly).toBe(10);
       expect(stats.highlightsWithNotes).toBe(3);
       expect(stats.totalBooks).toBe(5);
       expect(stats.colorDistribution).toEqual({ yellow: 6, blue: 4 });
       expect(stats.recentCount).toBe(2);
+      // Highlights and notes are the same rows distinguished by `note`: counting
+      // all rows as "highlights" double-counted every note (a book with two page
+      // notes reported "2 highlights · 2 notes").
+      expect(String(mockSelect.mock.calls[0]?.[0])).toContain("note IS NULL OR note = ''");
     });
   });
 });

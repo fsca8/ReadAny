@@ -10,7 +10,8 @@ import type { Bookmark, Highlight, HighlightColor, Note } from "../types";
 import { eventBus } from "../utils/event-bus";
 
 export interface HighlightStats {
-  totalHighlights: number;
+  /** Rows that are plain highlights: no note attached. */
+  highlightsOnly: number;
   highlightsWithNotes: number;
   totalBooks: number;
   colorDistribution: Record<string, number>;

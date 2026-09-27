@@ -27,6 +27,23 @@ export type SelectionNoteMutation =
       updates: Pick<Highlight, "note" | "updatedAt">;
     };
 
+/**
+ * A page-level note: the row carries note text but no selected text (it was
+ * created from the reader's current position, see `createSelectionNoteMutation`
+ * with `text: ""`). Such a row has no highlight aspect at all, so deleting its
+ * note must delete the row. Clearing only the note text would leave an empty
+ * highlight behind, which then shows up under 高亮 in the notes UI.
+ *
+ * Rows that DO have selected text keep their highlight when their note is
+ * removed — the annotation is still meaningful without a comment.
+ */
+export function isPageLevelNote(highlight: {
+  note?: string | null;
+  text?: string | null;
+}): boolean {
+  return Boolean((highlight.note ?? "").trim()) && !(highlight.text ?? "").trim();
+}
+
 export function createSelectionNoteMutation(
   input: SelectionNoteMutationInput,
 ): SelectionNoteMutation {

@@ -5,7 +5,7 @@ import { useAnnotationStore } from "@/stores/annotation-store";
 import { useLibraryStore } from "@/stores/library-store";
 import { useNotebookStore } from "@/stores/notebook-store";
 import { type ExportFormat, annotationExporter } from "@readany/core/export";
-import { createSelectionNoteMutation } from "@readany/core/reader";
+import { createSelectionNoteMutation, isPageLevelNote } from "@readany/core/reader";
 import type { Highlight, Note } from "@readany/core/types";
 import { HIGHLIGHT_COLOR_HEX } from "@readany/core/types";
 import { cn } from "@readany/core/utils";
@@ -134,8 +134,16 @@ export function NotebookPanel({
 
   const handleDeleteNote = () => {
     if (editingHighlight) {
-      updateHighlight(editingHighlight.id, { note: undefined });
-      onAddAnnotation?.(editingHighlight.cfi, editingHighlight.color, undefined);
+      // A page-level note carries no selected text, so there is no highlight to
+      // keep: delete the row. Clearing only the note would leave an empty
+      // highlight behind (it would show up under 高亮).
+      if (isPageLevelNote(editingHighlight)) {
+        removeHighlight(editingHighlight.id);
+        onDeleteAnnotation?.(editingHighlight.cfi);
+      } else {
+        updateHighlight(editingHighlight.id, { note: undefined });
+        onAddAnnotation?.(editingHighlight.cfi, editingHighlight.color, undefined);
+      }
       clearPending();
       setNoteContent("");
     }
@@ -153,8 +161,14 @@ export function NotebookPanel({
   };
 
   const handleDeleteNoteOnly = (highlight: Highlight) => {
-    updateHighlight(highlight.id, { note: undefined });
-    onAddAnnotation?.(highlight.cfi, highlight.color, undefined);
+    // Same rule as above: a page-level note has no highlight to keep.
+    if (isPageLevelNote(highlight)) {
+      removeHighlight(highlight.id);
+      onDeleteAnnotation?.(highlight.cfi);
+    } else {
+      updateHighlight(highlight.id, { note: undefined });
+      onAddAnnotation?.(highlight.cfi, highlight.color, undefined);
+    }
     // Clear editing state if we're editing this highlight
     if (editingHighlight?.id === highlight.id) {
       clearPending();

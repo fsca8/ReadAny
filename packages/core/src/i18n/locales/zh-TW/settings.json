@@ -279,7 +279,7 @@
     "syncWebdavNotFound": "WebDAV 位址或路徑不存在，請檢查伺服器位址和根路徑。",
     "syncWebdavMethodNotAllowed": "伺服器沒有正確回應 WebDAV 請求，請確認已經開啟 WebDAV 服務。",
     "syncWebdavTimeout": "WebDAV 連接逾時（{{seconds}} 秒），請檢查伺服器位址、連接埠和網路。",
-    "syncWebdavNetworkError": "無法連接到 WebDAV 伺服器，請檢查網路、位址、連接埠或憑證設定。",
+    "syncWebdavNetworkError": "無法連接到 WebDAV 伺服器（網路中斷或設定/憑證問題）。單次中斷會自動重試；若持續失敗，請檢查網路、位址、連接埠或憑證設定。",
     "syncWebdavDesktopScopeError": "桌面端目前沒有放行這個 WebDAV 位址，請更新到最新版本後重試，或重新啟動應用程式。",
     "syncWebdavTlsError": "WebDAV TLS 憑證校驗失敗，請檢查憑證，或開啟允許不安全連接後再試。",
     "syncWebdavServerError": "WebDAV 伺服器異常（{{status}}）。",

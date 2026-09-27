@@ -510,7 +510,10 @@ describe("runPerBookSync (per-book cloud engine)", () => {
         schemaVersion: 1,
         bookId: "book-1",
         book: { id: "book-1", updated_at: T2 },
-        highlights: [],
+        // The file must really contain the row the index's `a` refers to —
+        // otherwise the engine correctly treats it as a file behind its own index
+        // and re-uploads (see the repair test below).
+        highlights: [{ id: "hl-1", book_id: "book-1", text: "same", updated_at: T2 }],
         notes: [],
         bookmarks: [],
         writerDeviceId: "device-b",
@@ -518,11 +521,90 @@ describe("runPerBookSync (per-book cloud engine)", () => {
       },
     });
     const getSpy = vi.spyOn(backend, "getJSON");
+    const putSpy = vi.spyOn(backend, "putJSON");
 
     const result = await runPerBookSync(backend);
 
     expect(result.success).toBe(true);
-    expect(getSpy).not.toHaveBeenCalledWith("/readany/sync/books/book-1.json");
+    // Reading the file once is deliberate: the push phase verifies that the file
+    // really contains the markers the index advertises (self-heal for a file that
+    // lost data). What must NOT happen is an upload.
+    expect(
+      getSpy.mock.calls.filter(([path]) => path === "/readany/sync/books/book-1.json"),
+    ).toHaveLength(1);
+    expect(putSpy).not.toHaveBeenCalledWith(
+      "/readany/sync/books/book-1.json",
+      expect.anything(),
+    );
+  });
+
+  it("re-uploads a book when the index advertises data its own file lost", async () => {
+    // Reproduces the production divergence: the index still carries this device's
+    // newest marker (`a`), but the remote file only holds the older version (a peer
+    // read a stale body and merged it back, or a cache served an old copy). The
+    // owner would otherwise skip its push forever, so the file must be repaired.
+    seedBook(db, "book-1", T2);
+    db.insert("highlights", { id: "hl-1", book_id: "book-1", text: "not in the file", updated_at: T3 });
+
+    const backend = new FakeBackend({
+      "/readany/sync/index.json": {
+        schemaVersion: 2,
+        updatedAt: T3,
+        books: { "book-1": { b: T2, a: T3 } },
+        threads: {},
+      },
+      "/readany/sync/books/book-1.json": {
+        schemaVersion: 1,
+        bookId: "book-1",
+        book: { id: "book-1", updated_at: T2 },
+        highlights: [],
+        notes: [],
+        bookmarks: [],
+        writerDeviceId: "device-b",
+        updatedAt: T2,
+      },
+    });
+    const putSpy = vi.spyOn(backend, "putJSON");
+
+    const result = await runPerBookSync(backend);
+
+    expect(result.success).toBe(true);
+    const uploaded = putSpy.mock.calls.find(([path]) => path === "/readany/sync/books/book-1.json");
+    expect(uploaded).toBeDefined();
+    // Read-merge-write: the repaired file carries this device's row.
+    expect(JSON.stringify(uploaded?.[1])).toContain("hl-1");
+  });
+
+  it("records a tombstone for a peer deletion of a row this device never had", async () => {
+    seedBook(db, "book-1", T1);
+
+    const backend = new FakeBackend({
+      "/readany/sync/index.json": {
+        schemaVersion: 2,
+        updatedAt: T3,
+        books: { "book-1": { b: T1, a: T3 } },
+        threads: {},
+      },
+      "/readany/sync/books/book-1.json": {
+        schemaVersion: 1,
+        bookId: "book-1",
+        book: { id: "book-1", updated_at: T1 },
+        highlights: [],
+        notes: [],
+        bookmarks: [],
+        deleted: { highlights: { "hl-gone": T3 } },
+        writerDeviceId: "device-b",
+        updatedAt: T3,
+      },
+    });
+
+    const result = await runPerBookSync(backend);
+
+    expect(result.success).toBe(true);
+    // Without this the local annotation marker can never reach the peer's `a`, so
+    // the book would be re-pulled on every sync and the deletion would never be
+    // carried on to other peers.
+    expect(db.tombstones.get("highlights:hl-gone")?.deleted_at).toBe(T3);
   });
 
   it("deletes the local book when the remote index carries a newer tombstone", async () => {

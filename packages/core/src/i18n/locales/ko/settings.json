@@ -275,7 +275,7 @@
     "syncWebdavNotFound": "WebDAV 주소 또는 경로를 찾을 수 없어요. 서버 URL과 루트 경로를 확인해주세요.",
     "syncWebdavMethodNotAllowed": "서버가 WebDAV 요청에 올바르게 응답하지 않았어요. WebDAV가 활성화되어 있는지 확인해주세요.",
     "syncWebdavTimeout": "WebDAV 연결이 {{seconds}}초 후 시간 초과되었어요. 서버 URL, 포트, 네트워크를 확인해주세요.",
-    "syncWebdavNetworkError": "WebDAV 서버에 접근할 수 없어요. 네트워크, URL, 포트 또는 인증서 설정을 확인해주세요.",
+    "syncWebdavNetworkError": "WebDAV 서버에 접근할 수 없어요 (일시적인 네트워크 끊김 또는 설정/인증서 문제). 한 번의 끊김은 자동으로 재시도해요. 계속 실패하면 네트워크, URL, 포트, 인증서 설정을 확인해주세요.",
     "syncWebdavDesktopScopeError": "이 데스크톱 빌드에서 해당 WebDAV 주소가 아직 허용되지 않았어요. 최신 빌드로 업데이트하고 앱을 다시 시작한 후 시도해주세요.",
     "syncWebdavTlsError": "WebDAV TLS 인증서 검증 실패. 인증서를 확인하거나, 비보안 연결을 허용하고 다시 시도해주세요.",
     "syncWebdavServerError": "WebDAV 서버 오류 ({{status}}).",

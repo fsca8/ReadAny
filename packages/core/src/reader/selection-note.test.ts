@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createSelectionNoteMutation } from "./selection-note";
+import { createSelectionNoteMutation, isPageLevelNote } from "./selection-note";
 
 describe("createSelectionNoteMutation", () => {
   it("creates a new highlight mutation for a fresh note", () => {
@@ -87,5 +87,22 @@ describe("createSelectionNoteMutation", () => {
         updatedAt: 123,
       },
     });
+  });
+});
+
+describe("isPageLevelNote", () => {
+  it("is true for a note with no selected text", () => {
+    expect(isPageLevelNote({ note: "页级笔记内容", text: "" })).toBe(true);
+    expect(isPageLevelNote({ note: "note", text: null })).toBe(true);
+    expect(isPageLevelNote({ note: "note", text: "   " })).toBe(true);
+  });
+
+  it("is false for a note attached to a real selection", () => {
+    expect(isPageLevelNote({ note: "comment", text: "selected words" })).toBe(false);
+  });
+
+  it("is false for rows without a note", () => {
+    expect(isPageLevelNote({ note: "", text: "selected words" })).toBe(false);
+    expect(isPageLevelNote({ note: undefined, text: undefined })).toBe(false);
   });
 });

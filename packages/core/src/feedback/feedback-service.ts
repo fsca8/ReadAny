@@ -46,6 +46,8 @@ let _flushTimer: ReturnType<typeof setInterval> | null = null;
 let _logCaptureCleanup: (() => void) | null = null;
 let _logDirReady = false;
 let _logDirPath = "";
+/** Last day (UTC date string) cleanup ran for — so a long-running app still cleans. */
+let _lastCleanupDay = "";
 
 function getTodayDateStr(): string {
   return new Date().toISOString().slice(0, 10); // "2026-05-08"
@@ -96,28 +98,96 @@ async function flushLogs(): Promise<void> {
   }
 }
 
-/** Delete log files older than LOG_MAX_DAYS */
-async function cleanOldLogs(): Promise<void> {
+/**
+ * Date embedded in a log file name ("app-2026-09-05.log", and also rotated or
+ * legacy names like "app-2026-09-05.1.log" / "readany-2026-09-05.log").
+ * Returns null for anything that is not a dated .log file, so unrelated files in
+ * the directory are left alone.
+ */
+export function logFileDate(name: string): string | null {
+  if (!name.toLowerCase().endsWith(".log")) return null;
+  const match = /(\d{4}-\d{2}-\d{2})/.exec(name);
+  return match ? match[1] : null;
+}
+
+/** Legacy fallback: probe guessed date names (i = 7 … ~13 months back). */
+async function cleanOldLogsByDateProbe(
+  platform: ReturnType<typeof getPlatformService>,
+  dir: string,
+): Promise<void> {
+  const now = Date.now();
+  let deleted = 0;
+  for (let i = LOG_MAX_DAYS; i < 400; i++) {
+    const dateStr = new Date(now - i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const file = await platform.joinPath(dir, `app-${dateStr}.log`);
+    try {
+      if (await platform.exists(file)) {
+        await platform.deleteFile(file);
+        deleted++;
+      }
+    } catch (error) {
+      console.warn(`[Logs] cleanup: failed to delete app-${dateStr}.log:`, error);
+    }
+  }
+  console.log(`[Logs] cleanup (date probe): deleted ${deleted}`);
+}
+
+/**
+ * Delete log files older than LOG_MAX_DAYS.
+ *
+ * Enumerates the directory instead of probing a fixed set of date offsets. The
+ * previous version only looked at dates 7–29 days back, so a file from 30+ days
+ * ago was never removed, and any name that did not match exactly
+ * `app-<date>.log` (rotated or renamed files) was invisible to it. Those
+ * survivors are the reason the log dir grew forever. Failures are now logged
+ * instead of swallowed — a silent failure made cleanup a no-op nobody noticed.
+ */
+export async function cleanOldLogs(): Promise<void> {
   try {
     const platform = getPlatformService();
     const dir = await ensureLogDir();
-    const now = Date.now();
+    const cutoff = new Date(Date.now() - LOG_MAX_DAYS * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .slice(0, 10);
 
-    // Try to delete old files by iterating possible old dates (7-30 days ago)
-    for (let i = LOG_MAX_DAYS; i < 30; i++) {
-      const d = new Date(now - i * 24 * 60 * 60 * 1000);
-      const dateStr = d.toISOString().slice(0, 10);
-      const oldFile = await platform.joinPath(dir, `app-${dateStr}.log`);
+    const listDir = platform.readDir?.bind(platform);
+    if (!listDir) {
+      await cleanOldLogsByDateProbe(platform, dir);
+      return;
+    }
+
+    let names: string[];
+    try {
+      names = await listDir(dir);
+    } catch (error) {
+      console.warn(`[Logs] cleanup: cannot list ${dir}, falling back to date probe:`, error);
+      await cleanOldLogsByDateProbe(platform, dir);
+      return;
+    }
+
+    let deleted = 0;
+    let kept = 0;
+    let failed = 0;
+    for (const name of names) {
+      const date = logFileDate(name);
+      if (date === null || date >= cutoff) {
+        kept++;
+        continue;
+      }
       try {
-        if (await platform.exists(oldFile)) {
-          await platform.deleteFile(oldFile);
-        }
-      } catch {
-        // Ignore
+        await platform.deleteFile(await platform.joinPath(dir, name));
+        deleted++;
+      } catch (error) {
+        failed++;
+        console.warn(`[Logs] cleanup: failed to delete ${name}:`, error);
       }
     }
-  } catch {
+    console.log(
+      `[Logs] cleanup: deleted ${deleted}, kept ${kept}, failed ${failed} (cutoff ${cutoff})`,
+    );
+  } catch (error) {
     // Non-fatal
+    console.warn("[Logs] cleanup failed:", error);
   }
 }
 
@@ -336,9 +406,17 @@ export function installFeedbackLogCapture(): () => void {
   // Start periodic flush timer
   _flushTimer = setInterval(() => {
     flushLogs().catch(() => {});
+    // Cleanup runs on startup, but apps stay open for days: re-run it when the
+    // day flips so old files cannot pile up until the next restart.
+    const today = getTodayDateStr();
+    if (today !== _lastCleanupDay) {
+      _lastCleanupDay = today;
+      cleanOldLogs().catch(() => {});
+    }
   }, LOG_FLUSH_INTERVAL_MS);
 
   // Clean old logs on startup (fire-and-forget)
+  _lastCleanupDay = getTodayDateStr();
   cleanOldLogs().catch(() => {});
 
   _logCaptureCleanup = () => {

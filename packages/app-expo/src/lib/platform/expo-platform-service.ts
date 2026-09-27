@@ -88,6 +88,12 @@ export class ExpoPlatformService implements IPlatformService {
     }
   }
 
+  async readDir(path: string): Promise<string[]> {
+    const dir = new Directory(path);
+    if (!dir.exists) return [];
+    return dir.list().map((entry) => entry.name);
+  }
+
   async getAppDataDir(): Promise<string> {
     return Paths.document.uri;
   }

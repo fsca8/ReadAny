@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type FetchOptions, type IPlatformService, setPlatformService } from "../services/platform";
-import { WebDavClient, sanitizeWebDavRemoteRoot, transferBudgetMs } from "./webdav-client";
+import { WebDavClient, cacheBustedUrl, sanitizeWebDavRemoteRoot, transferBudgetMs } from "./webdav-client";
+
+/** Drop the cache-busting nonce so URL assertions stay exact. */
+const stripCacheBust = (url: string): string => url.replace(/[?&]_=[^&]*/, "");
 
 function installFetchStub(
   handler: (url: string, options?: FetchOptions) => Response | Promise<Response>,
@@ -132,19 +135,83 @@ describe("WebDavClient PROPFIND parsing", () => {
     });
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // The fast network failure is retried (stale-keep-alive protection), so run the
+    // backoff on fake timers to keep this test instant.
+    vi.useFakeTimers();
     try {
       const client = new WebDavClient("https://dav.example.com/dav", "alice", "secret");
-      await client.ensureDirectory("/readany");
+      const pending = client.ensureDirectory("/readany");
+      await vi.advanceTimersByTimeAsync(10_000);
+      await pending;
     } finally {
+      vi.useRealTimers();
       warnSpy.mockRestore();
     }
 
-    expect(calls.map((call) => call.method)).toEqual(["PROPFIND", "MKCOL", "PROPFIND"]);
-    expect(calls.map((call) => call.url)).toEqual([
-      "https://dav.example.com/dav/readany/",
-      "https://dav.example.com/dav/readany/",
-      "https://dav.example.com/dav/readany/",
-    ]);
+    // Shape, not exact counts: MKCOL may be attempted several times, and the
+    // directory is re-checked afterwards so the caller can treat the mkdir as done.
+    const methods = calls.map((call) => call.method);
+    expect(methods[0]).toBe("PROPFIND");
+    expect(methods.filter((method) => method === "MKCOL").length).toBeGreaterThan(0);
+    expect(methods[methods.length - 1]).toBe("PROPFIND");
+    expect(new Set(calls.map((call) => call.url))).toEqual(
+      new Set(["https://dav.example.com/dav/readany/"]),
+    );
+  });
+
+  it("retries a fast network failure once the backoff elapses", async () => {
+    let attempts = 0;
+    installFetchStub(() => {
+      attempts++;
+      if (attempts === 1) {
+        // Stale pooled connection: the request dies in milliseconds.
+        throw new Error("XHR request failed with status 0");
+      }
+      return new Response("{}", { status: 200 });
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    vi.useFakeTimers();
+    try {
+      const client = new WebDavClient("https://dav.example.com/dav", "alice", "secret");
+      const pending = client.get("/readany/sync/index.json");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await pending).toBeInstanceOf(Uint8Array);
+    } finally {
+      vi.useRealTimers();
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+
+    expect(attempts).toBe(2);
+  });
+
+  it("does not retry a slow network failure", async () => {
+    // Only FAST failures look like a dead keep-alive socket; a transfer that burned
+    // real time is reported as-is (a retry would cost another full attempt).
+    let attempts = 0;
+    installFetchStub(async () => {
+      attempts++;
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      throw new Error("Software caused connection abort");
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    vi.useFakeTimers();
+    try {
+      const client = new WebDavClient("https://dav.example.com/dav", "alice", "secret");
+      const settled = client.get("/readany/sync/index.json").catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await settled).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+
+    expect(attempts).toBe(1);
   });
 
   it("treats MKCOL auth failure as success when the parent listing shows the directory", async () => {
@@ -231,13 +298,40 @@ describe("WebDavClient PROPFIND parsing", () => {
       .split("/")
       .map((segment) => encodeURIComponent(segment))
       .join("/");
-    expect(calls[0]?.url).toBe(`https://dav.example.com/dav${expectedPath}`);
-    expect(Object.keys(calls[0]?.headers ?? {})).toEqual(["Authorization"]);
+    // GETs carry a cache-busting nonce (see cacheBustedUrl) — strip it so the
+    // path/encoding assertion stays exact.
+    expect(stripCacheBust(calls[0]?.url ?? "")).toBe(`https://dav.example.com/dav${expectedPath}`);
+    expect(Object.keys(calls[0]?.headers ?? {})).toEqual(["Authorization", "Cache-Control", "Pragma"]);
     expect(
       Object.values(calls[0]?.headers ?? {}).every((value) =>
         Array.from(value).every((char) => char.charCodeAt(0) <= 0x7f),
       ),
     ).toBe(true);
+  });
+
+  it("marks reads uncacheable so no HTTP layer can serve a stale sync payload", async () => {
+    const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+    installFetchStub((url, options) => {
+      calls.push({ url, headers: (options?.headers ?? {}) as Record<string, string> });
+      return new Response("{}", { status: 200 });
+    });
+
+    const client = new WebDavClient("https://dav.example.com/dav", "alice", "secret");
+    await client.get("/readany/sync/books/book-1.json");
+
+    expect(calls[0]?.headers["Cache-Control"]).toBe("no-store");
+    expect(calls[0]?.headers.Pragma).toBe("no-cache");
+    expect(calls[0]?.url).toMatch(/\?_=[a-z0-9]+$/);
+  });
+});
+
+describe("cacheBustedUrl", () => {
+  it("appends a unique nonce and preserves an existing query", () => {
+    const first = cacheBustedUrl("https://host/p.json");
+    const second = cacheBustedUrl("https://host/p.json");
+    expect(first).toMatch(/^https:\/\/host\/p\.json\?_=/);
+    expect(second).not.toBe(first);
+    expect(cacheBustedUrl("https://host/p.json?x=1")).toMatch(/^https:\/\/host\/p\.json\?x=1&_=/);
   });
 });
 

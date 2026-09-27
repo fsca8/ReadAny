@@ -44,7 +44,7 @@ const baseHighlightWithBook: HighlightWithBook = {
 };
 
 const baseStats = {
-  totalHighlights: 1,
+  highlightsOnly: 1,
   highlightsWithNotes: 1,
   totalBooks: 1,
   colorDistribution: { yellow: 1 },
@@ -147,7 +147,7 @@ describe("useAnnotationStore", () => {
     dbMocks.getAllHighlightsWithBooks.mockResolvedValue([]);
     dbMocks.getHighlightStats.mockResolvedValue({
       ...baseStats,
-      totalHighlights: 0,
+      highlightsOnly: 0,
       highlightsWithNotes: 0,
       totalBooks: 0,
       colorDistribution: {},
@@ -161,7 +161,7 @@ describe("useAnnotationStore", () => {
 
     await vi.waitFor(() => {
       expect(dbMocks.deleteHighlight).toHaveBeenCalledWith("hl-1");
-      expect(useAnnotationStore.getState().stats?.totalHighlights).toBe(0);
+      expect(useAnnotationStore.getState().stats?.highlightsOnly).toBe(0);
     });
 
     expect(emitSpy).toHaveBeenCalledWith("annotation:removed", {

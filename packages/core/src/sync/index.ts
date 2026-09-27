@@ -1,6 +1,7 @@
 export { WebDavClient } from "./webdav-client";
 export { syncFiles, downloadBookFile } from "./sync-files";
 export type { SyncFilesOptions } from "./sync-files";
+export { filterSyncLines, SYNC_LOG_KEYWORDS } from "./sync-log-filter";
 export { parallelLimit } from "./sync-transfer";
 export { runSimpleSync, collectChanges, applyChanges } from "./simple-sync";
 export { setSyncAdapter, getSyncAdapter } from "./sync-adapter";

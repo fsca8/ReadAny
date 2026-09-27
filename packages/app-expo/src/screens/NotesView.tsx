@@ -20,6 +20,7 @@ import { getHighlightsWithBook, type HighlightWithBook } from "@readany/core/db/
 import { AnnotationExporter, type ExportFormat } from "@readany/core/export";
 import {
   createSelectionNoteMutation,
+  isPageLevelNote,
   pageNoteLabel,
   sortAnnotationsByPosition,
 } from "@readany/core/reader";
@@ -293,6 +294,16 @@ export function NotesView({
           text: t("common.delete", "删除"),
           style: "destructive",
           onPress: () => {
+            // A page-level note (note text, no selected text) has no highlight
+            // aspect: clearing only its note would leave an empty highlight behind,
+            // so it would reappear under 高亮. Delete the row instead.
+            if (isPageLevelNote(highlight)) {
+              removeHighlight(highlight.id);
+              if (pinnedBookId) {
+                setPinnedRows((prev) => prev?.filter((h) => h.id !== highlight.id) ?? prev);
+              }
+              return;
+            }
             updateHighlight(highlight.id, { note: undefined });
             // Pinned rows are this screen's own snapshot of the book (they must
             // not come from the library-wide list), so mirror the edit locally;
@@ -308,7 +319,7 @@ export function NotesView({
         },
       ]);
     },
-    [updateHighlight, t, pinnedBookId],
+    [updateHighlight, removeHighlight, t, pinnedBookId],
   );
 
   const handleDeleteHighlight = useCallback(
@@ -423,7 +434,9 @@ export function NotesView({
     [selectedBook, books, t],
   );
 
-  const totalHighlights = stats?.totalHighlights ?? 0;
+  // `highlightsOnly` counts rows WITHOUT a note: highlights and notes are the same
+  // rows, so counting all rows as highlights double-counted every note.
+  const highlightsOnly = stats?.highlightsOnly ?? 0;
   const totalNotes = stats?.highlightsWithNotes ?? 0;
   const totalBooks = stats?.totalBooks ?? 0;
 
@@ -709,7 +722,7 @@ export function NotesView({
         <View style={s.statsRow}>
           <View style={s.statBadge}>
             <HighlighterIcon size={14} color={colors.amber} />
-            <Text style={s.statValue}>{totalHighlights}</Text>
+            <Text style={s.statValue}>{highlightsOnly}</Text>
             <Text style={s.statLabel}>{t("notebook.highlightsSection", "高亮")}</Text>
           </View>
           <View style={s.statBadge}>

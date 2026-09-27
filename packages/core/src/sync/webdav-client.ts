@@ -87,6 +87,18 @@ export function bodyByteLength(body?: string | Uint8Array | ArrayBuffer): number
 }
 
 /**
+ * Append a unique query parameter so any URL-keyed cache in the request path
+ * (reverse proxy / CDN) cannot match a previous entry. WebDAV servers ignore
+ * unknown query parameters — pfm's router matches on the path only. Exported for
+ * tests.
+ */
+export function cacheBustedUrl(url: string): string {
+  const separator = url.includes("?") ? "&" : "?";
+  const nonce = Math.random().toString(36).slice(2, 10);
+  return `${url}${separator}_=${Date.now().toString(36)}${nonce}`;
+}
+
+/**
  * Retry policy for transient HTTP failures (401-after-auth, 429, 5xx).
  * Backoff: 500ms → 1s → 2s. Network/timeout errors are NOT retried — they may
  * have consumed the full timeout already, so retrying would amplify latency.
@@ -95,6 +107,16 @@ export function bodyByteLength(body?: string | Uint8Array | ArrayBuffer): number
  */
 const RETRY_MAX_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 500;
+/**
+ * A network failure inside this window is almost always a stale pooled
+ * connection — the server (or a proxy/tunnel in between) closed a keep-alive
+ * socket and the client reused it, which fails in milliseconds without ever
+ * reaching the server. Those are safe and cheap to retry: the retry opens a fresh
+ * connection. Failures that burned more time are either timeouts or transfers
+ * that died mid-body, where a blind retry costs another full attempt, so they are
+ * reported as-is.
+ */
+const NETWORK_RETRY_MAX_ELAPSED_MS = 2_000;
 
 type WebDavErrorKind =
   | "auth"
@@ -225,7 +247,8 @@ function createRequestWebDavError(
   const err = error as { name?: string; message?: string; cause?: { code?: string } };
   const lowerMessage = err.message?.toLowerCase() ?? "";
   const connectionMessage = i18n.t("settings.syncWebdavNetworkError", {
-    defaultValue: "无法连接到 WebDAV 服务器，请检查网络、地址、端口或证书配置。",
+    defaultValue:
+      "无法连接到 WebDAV 服务器（网络中断或配置/证书问题）。单次中断会自动重试；若反复失败，请检查网络、地址、端口或证书配置。",
   });
 
   if (
@@ -393,12 +416,23 @@ export class WebDavClient {
     if (options.contentType) {
       headers["Content-Type"] = options.contentType;
     }
+    // Never let any HTTP layer cache a WebDAV read, and never let it answer from a
+    // cached entry without going to the server. pfm's WebDAV responses carry
+    // `Last-Modified` (the file's *creation* time, which an overwrite does not
+    // change) and no `Cache-Control`, so Android's React Native/OkHttp disk cache
+    // treated a days-old entry as heuristically fresh and returned a stale book
+    // file. The engine then merged that stale body and PUT it back, silently
+    // dropping the peer's rows. `no-store` makes the request uncacheable on both
+    // read and write, and the cache-busting query below defeats URL-keyed caches
+    // (proxy/CDN) that ignore request headers.
+    headers["Cache-Control"] = options.headers?.["Cache-Control"] ?? "no-store";
+    headers.Pragma = options.headers?.Pragma ?? "no-cache";
     const effectiveTimeoutMs = this.getTimeout(
       method,
       options.timeoutMs,
       bodyByteLength(options.body),
     );
-    return await platform.fetch(url, {
+    return await platform.fetch(method === "GET" || method === "HEAD" ? cacheBustedUrl(url) : url, {
       method,
       headers,
       body: options.body as BodyInit | undefined,
@@ -459,6 +493,25 @@ export class WebDavClient {
           `[WebDAV] ${method} ${logPath} failed (${webDavError.kind}) after ${elapsed}ms:`,
           error,
         );
+
+        // Retry a FAST network failure: that is the stale-keep-alive signature
+        // (status 0 / "connection abort" in milliseconds) and the retry lands on a
+        // new connection. Timeouts stay non-retryable — they already consumed the
+        // size-aware budget. Every method this client issues is idempotent and its
+        // body is buffered, so re-sending is safe.
+        if (
+          attempt < RETRY_MAX_ATTEMPTS &&
+          webDavError.kind === "network" &&
+          elapsed < NETWORK_RETRY_MAX_ELAPSED_MS
+        ) {
+          const delay = RETRY_BASE_DELAY_MS * 2 ** attempt;
+          console.warn(
+            `[WebDAV] ${method} ${logPath} failed fast (network) after ${elapsed}ms, retrying in ${delay}ms (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS})`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+
         throw webDavError;
       }
     }

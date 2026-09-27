@@ -10,7 +10,7 @@ import { useAnnotationStore } from "@/stores/annotation-store";
 import { useAppStore } from "@/stores/app-store";
 import { useLibraryStore } from "@/stores/library-store";
 import { type ExportFormat, annotationExporter } from "@readany/core/export";
-import { sortAnnotationsByPosition } from "@readany/core/reader";
+import { isPageLevelNote, sortAnnotationsByPosition } from "@readany/core/reader";
 import type { Highlight, Note } from "@readany/core/types";
 import { HIGHLIGHT_COLOR_HEX } from "@readany/core/types";
 import { cn } from "@readany/core/utils";
@@ -203,8 +203,13 @@ export function NotesPage() {
     });
   };
 
-  // Delete only the note text, keep the highlight
+  // Delete only the note text, keep the highlight — unless the row IS the note
+  // (a page-level note with no selected text), in which case the row is removed.
   const handleDeleteNote = (highlight: HighlightWithBook) => {
+    if (isPageLevelNote(highlight)) {
+      removeHighlight(highlight.id);
+      return;
+    }
     updateHighlight(highlight.id, { note: undefined });
   };
 
@@ -331,7 +336,7 @@ export function NotesPage() {
               </div>
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {t("notes.stats", {
-                  highlights: stats?.totalHighlights || 0,
+                  highlights: stats?.highlightsOnly || 0,
                   notes: stats?.highlightsWithNotes || 0,
                   books: stats?.totalBooks || 0,
                 })}

@@ -283,7 +283,7 @@
     "syncWebdavNotFound": "The WebDAV address or path was not found. Check the server URL and root path.",
     "syncWebdavMethodNotAllowed": "The server did not respond correctly to a WebDAV request. Make sure WebDAV is enabled.",
     "syncWebdavTimeout": "WebDAV connection timed out after {{seconds}} seconds. Check the server URL, port, and network.",
-    "syncWebdavNetworkError": "Could not reach the WebDAV server. Check the network, URL, port, or certificate setup.",
+    "syncWebdavNetworkError": "Could not reach the WebDAV server (a network blip, or a configuration/certificate problem). A single blip is retried automatically; if it keeps failing, check the network, URL, port, or certificate setup.",
     "syncWebdavDesktopScopeError": "This desktop build has not allowed that WebDAV address yet. Update to the latest build and restart the app, then try again.",
     "syncWebdavTlsError": "WebDAV TLS certificate validation failed. Check the certificate, or allow insecure connections and try again.",
     "syncWebdavServerError": "WebDAV server error ({{status}}).",

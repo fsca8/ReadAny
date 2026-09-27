@@ -981,7 +981,10 @@ async function saveRemoteFileManifest(
       books,
     });
   } catch (e) {
-    console.warn("[Sync] Failed to save remote file manifest:", e);
+    console.warn(
+      "[Sync] Failed to save remote file manifest (non-fatal; the next sync re-compares the file set):",
+      e,
+    );
   }
 }
 
@@ -1198,7 +1201,7 @@ function buildUploadFileTask(backend: ISyncBackend, info: BookInfo): FileTask {
         console.log(`[Sync] ✓ Uploaded "${bookTitle}"${size} in ${Date.now() - taskStart}ms`);
         return true;
       } catch (e) {
-        console.log(`[Sync] ✗ Failed to upload "${bookTitle}": ${e}`);
+        console.log(`[Sync] ✗ Failed to upload "${bookTitle}": ${e} (will be retried on the next sync)`);
         return false;
       }
     },
@@ -1228,7 +1231,7 @@ function buildDownloadFileTask(
         console.log(`[Sync] ✓ Downloaded "${bookTitle}"${size} in ${Date.now() - taskStart}ms`);
         return true;
       } catch (e) {
-        console.log(`[Sync] ✗ Failed to download "${bookTitle}": ${e}`);
+        console.log(`[Sync] ✗ Failed to download "${bookTitle}": ${e} (will be retried on the next sync)`);
         return false;
       }
     },
@@ -1253,7 +1256,7 @@ function buildUploadCoverTask(backend: ISyncBackend, info: BookInfo): FileTask {
         console.log(`[Sync] ✓ Uploaded cover "${bookTitle}"${size} in ${Date.now() - taskStart}ms`);
         return true;
       } catch (e) {
-        console.log(`[Sync] ✗ Failed to upload cover "${bookTitle}": ${e}`);
+        console.log(`[Sync] ✗ Failed to upload cover "${bookTitle}": ${e} (will be retried on the next sync)`);
         return false;
       }
     },
@@ -1280,7 +1283,9 @@ function buildDownloadCoverTask(backend: ISyncBackend, info: BookInfo): FileTask
         );
         return true;
       } catch (e) {
-        console.log(`[Sync] ✗ Failed to download cover "${bookTitle}": ${e}`);
+        console.log(
+          `[Sync] ✗ Failed to download cover "${bookTitle}": ${e} (will be retried on the next sync)`,
+        );
         return false;
       }
     },

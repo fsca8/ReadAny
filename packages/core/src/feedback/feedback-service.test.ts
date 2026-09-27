@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type IPlatformService, setPlatformService } from "../services/platform";
-import { appendLog, appendStructuredLog, clearLogs, collectLogs } from "./feedback-service";
+import {
+  appendLog,
+  appendStructuredLog,
+  cleanOldLogs,
+  clearLogs,
+  collectLogs,
+  logFileDate,
+} from "./feedback-service";
 
 function createTestPlatform(): IPlatformService {
   const files = new Map<string, string>();
@@ -21,6 +28,13 @@ function createTestPlatform(): IPlatformService {
     exists: async (path) => files.has(path),
     deleteFile: async (path) => {
       files.delete(path);
+    },
+    readDir: async (path) => {
+      const prefix = path.endsWith("/") ? path : `${path}/`;
+      return [...files.keys()]
+        .filter((file) => file.startsWith(prefix))
+        .map((file) => file.slice(prefix.length))
+        .filter((name) => name.length > 0 && !name.includes("/"));
     },
     getAppDataDir: async () => "/tmp/readany-feedback-test",
     getDataDir: async () => "/tmp/readany-feedback-test",
@@ -89,5 +103,78 @@ describe("feedback log buffer", () => {
 
     expect(logs).toContain("[event:feedback.submit.start]");
     expect(logs).toContain('"type":"bug"');
+  });
+});
+
+describe("log cleanup", () => {
+  const logDir = "/tmp/readany-feedback-test/logs";
+  const listDir = async (platform: IPlatformService) => (await platform.readDir?.(logDir)) ?? [];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-27T12:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("reads the date out of plain, rotated and legacy log names", () => {
+    expect(logFileDate("app-2026-09-05.log")).toBe("2026-09-05");
+    expect(logFileDate("app-2026-09-05.1.log")).toBe("2026-09-05");
+    expect(logFileDate("readany-2026-09-05.log")).toBe("2026-09-05");
+    expect(logFileDate("notes.txt")).toBeNull();
+    expect(logFileDate("app.log")).toBeNull();
+  });
+
+  it("deletes logs older than the retention window and keeps the rest", async () => {
+    const platform = createTestPlatform();
+    setPlatformService(platform);
+    for (const name of [
+      "app-2026-09-05.log", // 22 days old → delete
+      "app-2026-09-19.log", // 8 days old → delete
+      "app-2026-09-20.log", // 7 days old → keep
+      "app-2026-09-27.log", // today → keep
+      "notes.txt", // not a log → keep
+    ]) {
+      await platform.writeTextFile(`${logDir}/${name}`, "x");
+    }
+
+    await cleanOldLogs();
+
+    expect((await listDir(platform)).sort()).toEqual([
+      "app-2026-09-20.log",
+      "app-2026-09-27.log",
+      "notes.txt",
+    ]);
+  });
+
+  it("falls back to date probing when the platform cannot list directories", async () => {
+    const platform = createTestPlatform();
+    // Simulate a platform that cannot enumerate directories.
+    (platform as { readDir?: IPlatformService["readDir"] }).readDir = undefined;
+    setPlatformService(platform);
+    await platform.writeTextFile(`${logDir}/app-2026-09-19.log`, "x");
+
+    await cleanOldLogs();
+
+    expect(await platform.exists(`${logDir}/app-2026-09-19.log`)).toBe(false);
+  });
+
+  it("keeps going when a single file cannot be deleted", async () => {
+    const platform = createTestPlatform();
+    const originalDelete = platform.deleteFile.bind(platform);
+    platform.deleteFile = async (path: string) => {
+      if (path.endsWith("app-2026-09-05.log")) throw new Error("EPERM");
+      await originalDelete(path);
+    };
+    setPlatformService(platform);
+    await platform.writeTextFile(`${logDir}/app-2026-09-05.log`, "x");
+    await platform.writeTextFile(`${logDir}/app-2026-09-19.log`, "x");
+
+    await cleanOldLogs();
+
+    // The undeletable file stays, the other one is still removed.
+    expect(await listDir(platform)).toEqual(["app-2026-09-05.log"]);
   });
 });

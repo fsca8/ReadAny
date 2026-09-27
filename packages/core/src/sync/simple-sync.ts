@@ -126,10 +126,23 @@ async function getTableColumns(
   const cached = tableColumnCache.get(table);
   if (cached) return cached;
 
-  const rows = await db.select<{ name: string }>(`PRAGMA table_info(${table})`);
-  const columns = new Set(rows.map((row) => row.name));
-  tableColumnCache.set(table, columns);
-  return columns;
+  try {
+    const rows = await db.select<{ name: string }>(`PRAGMA table_info(${table})`);
+    const columns = new Set(rows.map((row) => row.name));
+    // Diagnostic: an empty/misread column set makes filterRecordToExistingColumns
+    // drop every field, so upsertRecord silently writes nothing. Record what the
+    // platform actually returned (once per table per process).
+    console.log(
+      `[SyncDbg] columns(${table}) = ${columns.size} rows=${rows.length} [${[...columns]
+        .map((column) => String(column))
+        .join(",")}]`,
+    );
+    tableColumnCache.set(table, columns);
+    return columns;
+  } catch (error) {
+    console.warn(`[SyncDbg] columns(${table}) failed:`, error);
+    throw error;
+  }
 }
 
 async function filterRecordToExistingColumns(
@@ -450,7 +463,17 @@ export async function upsertRecord(
   const localRecord = table === "books" ? localizeSyncedBookRecord(record) : record;
   const filteredRecord = await filterRecordToExistingColumns(db, table, localRecord);
   const columns = Object.keys(filteredRecord);
-  if (columns.length === 0 || !columns.includes(pk)) return;
+  if (columns.length === 0 || !columns.includes(pk)) {
+    // Diagnostic: this path never throws, so a misread column set turns into a
+    // silent no-op — the remote change is reported as "applied 0" and the caller
+    // keeps re-pulling. Log the evidence.
+    console.warn(
+      `[SyncDbg] upsert ${table} skipped: columns=[${columns.join(",")}] pk=${pk} recordKeys=[${Object.keys(
+        localRecord,
+      ).join(",")}]`,
+    );
+    return;
+  }
 
   const values = Object.values(filteredRecord);
   const placeholders = columns.map(() => "?").join(", ");

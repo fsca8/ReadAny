@@ -120,6 +120,14 @@ export class TauriPlatformService implements IPlatformService {
     await remove(path);
   }
 
+  async readDir(path: string): Promise<string[]> {
+    const { readDir } = await import("@tauri-apps/plugin-fs");
+    const entries = await readDir(path);
+    return entries
+      .map((entry) => entry.name)
+      .filter((name): name is string => typeof name === "string" && name.length > 0);
+  }
+
   async getAppDataDir(): Promise<string> {
     const { appDataDir } = await import("@tauri-apps/api/path");
     return appDataDir();

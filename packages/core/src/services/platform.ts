@@ -104,6 +104,9 @@ export interface IPlatformService {
   mkdir(path: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   deleteFile(path: string): Promise<void>;
+  /** Entry names (not full paths) directly inside `path`. Optional: only log cleanup
+   *  needs it, and it falls back to probing guessed date names when absent. */
+  readDir?(path: string): Promise<string[]>;
   /** System app data dir — used only for bootstrap config (e.g. locating desktop-data-root.json). NOT for user data. */
   getAppDataDir(): Promise<string>;
   /** User data root — the directory where user-facing data (fonts, store JSON, etc.) should be stored.

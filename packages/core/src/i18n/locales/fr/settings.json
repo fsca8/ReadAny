@@ -273,7 +273,7 @@
     "syncWebdavNotFound": "L'adresse ou le chemin WebDAV est introuvable. Vérifiez l'URL du serveur et le chemin racine.",
     "syncWebdavMethodNotAllowed": "Le serveur n'a pas répondu correctement à une requête WebDAV. Assurez-vous que WebDAV est activé.",
     "syncWebdavTimeout": "Délai d'attente WebDAV dépassé après {{seconds}} secondes. Vérifiez l'URL du serveur, le port et le réseau.",
-    "syncWebdavNetworkError": "Impossible d'atteindre le serveur WebDAV. Vérifiez le réseau, l'URL, le port ou la configuration du certificat.",
+    "syncWebdavNetworkError": "Impossible d'atteindre le serveur WebDAV (coupure réseau passagère ou problème de configuration/certificat). Une coupure isolée est réessayée automatiquement ; si cela persiste, vérifiez le réseau, l'URL, le port ou le certificat.",
     "syncWebdavDesktopScopeError": "Cette version bureau n'a pas encore autorisé cette adresse WebDAV. Mettez à jour vers la dernière version et redémarrez l'appli, puis réessayez.",
     "syncWebdavTlsError": "Échec de la validation du certificat TLS WebDAV. Vérifiez le certificat ou autorisez les connexions non sécurisées et réessayez.",
     "syncWebdavServerError": "Erreur du serveur WebDAV ({{status}}).",

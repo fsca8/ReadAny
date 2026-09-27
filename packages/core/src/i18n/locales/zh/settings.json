@@ -279,7 +279,7 @@
     "syncWebdavNotFound": "WebDAV 地址或路径不存在，请检查服务器地址和根路径。",
     "syncWebdavMethodNotAllowed": "服务器没有正确响应 WebDAV 请求，请确认已经开启 WebDAV 服务。",
     "syncWebdavTimeout": "WebDAV 连接超时（{{seconds}} 秒），请检查服务器地址、端口和网络。",
-    "syncWebdavNetworkError": "无法连接到 WebDAV 服务器，请检查网络、地址、端口或证书配置。",
+    "syncWebdavNetworkError": "无法连接到 WebDAV 服务器（网络中断或配置/证书问题）。单次中断会自动重试；若反复失败，请检查网络、地址、端口或证书配置。",
     "syncWebdavDesktopScopeError": "桌面端当前没有放行这个 WebDAV 地址，请更新到最新版本后重试，或重新启动应用。",
     "syncWebdavTlsError": "WebDAV TLS 证书校验失败，请检查证书，或开启允许不安全连接后再试。",
     "syncWebdavServerError": "WebDAV 服务器异常（{{status}}）。",

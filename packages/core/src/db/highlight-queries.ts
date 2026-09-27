@@ -154,7 +154,8 @@ export async function getAllHighlightsWithBooks(limit = 500): Promise<HighlightW
 
 /** Get highlight statistics */
 export async function getHighlightStats(): Promise<{
-  totalHighlights: number;
+  /** Rows that are plain highlights: no note attached. */
+  highlightsOnly: number;
   highlightsWithNotes: number;
   totalBooks: number;
   colorDistribution: Record<string, number>;
@@ -162,8 +163,12 @@ export async function getHighlightStats(): Promise<{
 }> {
   const database = await getDB();
 
-  const totalRows = await database.select<{ count: number }>(
-    "SELECT COUNT(*) as count FROM highlights",
+  // Highlights and notes are the SAME rows distinguished by `note`, so counting
+  // `COUNT(*)` as "highlights" double-counted every note (a book with 2 page
+  // notes reported "2 highlights · 2 notes"). The notes UI lists highlights as
+  // "rows without a note", which is what this now measures.
+  const highlightRows = await database.select<{ count: number }>(
+    "SELECT COUNT(*) as count FROM highlights WHERE note IS NULL OR note = ''",
   );
   const notesRows = await database.select<{ count: number }>(
     "SELECT COUNT(*) as count FROM highlights WHERE note IS NOT NULL AND note != ''",
@@ -187,7 +192,7 @@ export async function getHighlightStats(): Promise<{
   );
 
   return {
-    totalHighlights: totalRows[0]?.count || 0,
+    highlightsOnly: highlightRows[0]?.count || 0,
     highlightsWithNotes: notesRows[0]?.count || 0,
     totalBooks: booksRows[0]?.count || 0,
     colorDistribution,
