@@ -495,6 +495,10 @@ describe("runPerBookSync (per-book cloud engine)", () => {
 
   it("skips books whose markers already match the remote index", async () => {
     seedBook(db, "book-1", T2);
+    // Book row AND annotations must both match the index markers: the index's
+    // `a` is only set when the book really has annotations, and a device that
+    // lacks them genuinely needs the file.
+    db.insert("highlights", { id: "hl-1", book_id: "book-1", text: "same", updated_at: T2 });
     const backend = new FakeBackend({
       "/readany/sync/index.json": {
         schemaVersion: 2,
@@ -742,6 +746,46 @@ describe("runPerBookSync (per-book cloud engine)", () => {
       "/readany/sync/books/book-1.json",
       expect.anything(),
     );
+  });
+
+  it("pulls annotations that are newer even when this device's book row is newer", async () => {
+    // The book row's updated_at is bumped by purely local actions (opening the
+    // book stamps last_opened_at through updateBook), so it is NOT a proxy for
+    // "our annotations are up to date".
+    seedBook(db, "book-1", T4);
+    db.insert("highlights", {
+      id: "hl-1",
+      book_id: "book-1",
+      text: "stale",
+      updated_at: T1,
+    });
+
+    const backend = new FakeBackend({
+      "/readany/sync/index.json": {
+        schemaVersion: 2,
+        updatedAt: T3,
+        books: { "book-1": { b: T2, a: T3 } },
+        threads: {},
+      },
+      "/readany/sync/books/book-1.json": {
+        schemaVersion: 1,
+        bookId: "book-1",
+        book: { id: "book-1", title: "Book", updated_at: T2 },
+        highlights: [],
+        notes: [],
+        bookmarks: [],
+        deleted: { highlights: { "hl-1": T3 } },
+        writerDeviceId: "device-b",
+        updatedAt: T3,
+      },
+    });
+
+    const result = await runPerBookSync(backend);
+
+    expect(result.success).toBe(true);
+    // Remote annotations are newer (T3 > T1) → the peer's deletion must land,
+    // even though our book row (T4) is newer than the index's `b`.
+    expect(db.table("highlights").has("hl-1")).toBe(false);
   });
 
   it("pulls chat day files past the cursor and advances the cursor", async () => {

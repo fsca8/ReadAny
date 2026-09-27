@@ -3,6 +3,7 @@ import {
   ChevronLeftIcon,
   HighlighterIcon,
   NotebookPenIcon,
+  PlusIcon,
   SearchIcon,
   ShareIcon,
   XIcon,
@@ -11,15 +12,20 @@ import { KeyboardAwareScrollView } from "@/components/ui/KeyboardAwareScrollView
 import { SyncButton } from "@/components/ui/SyncButton";
 import { openMobileBook } from "@/lib/library/open-mobile-book";
 import type { RootStackParamList } from "@/navigation/RootNavigator";
-import { useAnnotationStore, useLibraryStore } from "@/stores";
+import { useAnnotationStore, useLibraryStore, useSettingsStore } from "@/stores";
 import { useColors, useTheme } from "@/styles/theme";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import type { HighlightWithBook } from "@readany/core/db/database";
+import { getHighlightsWithBook, type HighlightWithBook } from "@readany/core/db/database";
 import { AnnotationExporter, type ExportFormat } from "@readany/core/export";
-import { pageNoteLabel, sortAnnotationsByPosition } from "@readany/core/reader";
+import {
+  createSelectionNoteMutation,
+  pageNoteLabel,
+  sortAnnotationsByPosition,
+} from "@readany/core/reader";
 import type { Highlight } from "@readany/core/types";
 import { eventBus } from "@readany/core/utils/event-bus";
+import { PageNoteModal } from "./reader/PageNoteModal";
 /**
  * NotesScreen — matching Tauri mobile NotesPage exactly.
  * Features: stats header, book notebooks list with covers, detail view with
@@ -55,11 +61,23 @@ type DetailTab = "notes" | "highlights";
 
 export function NotesView({
   initialBookId,
+  pinnedBookId,
+  pageNoteAnchor,
   showBackButton,
   edges = ["top"],
   hideDetailHeader,
 }: {
   initialBookId?: string | null;
+  /**
+   * Pin the view to ONE book (the reader's notebook entry). Unlike
+   * `initialBookId` — which is just the pre-selected item of the full library
+   * notebook list — a pinned view only ever shows this book: it loads the book's
+   * annotations by book id, keeps them even when the book has none yet, and can
+   * never fall back to the library-wide list.
+   */
+  pinnedBookId?: string | null;
+  /** Anchor for the "add page note" entry (the reader's current position). */
+  pageNoteAnchor?: { cfi: string; chapterTitle?: string } | null;
   showBackButton?: boolean;
   edges?: ("top" | "bottom" | "left" | "right")[];
   hideDetailHeader?: boolean;
@@ -68,16 +86,21 @@ export function NotesView({
   const { isDark } = useTheme();
   const s = makeStyles(colors);
   const { t } = useTranslation();
+  const isPinned = Boolean(pinnedBookId);
   const nav = useNavigation<Nav>();
   const {
     highlightsWithBooks,
     loadAllHighlightsWithBooks,
+    addHighlight,
     removeHighlight,
     updateHighlight,
     stats,
     loadStats,
   } = useAnnotationStore();
   const books = useLibraryStore((s) => s.books);
+  const defaultHighlightColor = useSettingsStore(
+    (s) => s.readSettings.defaultHighlightColor ?? "yellow",
+  );
 
   const [selectedBookId, setSelectedBookId] = useState<string | null>(initialBookId || null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -87,6 +110,19 @@ export function NotesView({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editNote, setEditNote] = useState("");
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [pinnedRows, setPinnedRows] = useState<HighlightWithBook[] | null>(null);
+  const [showPageNote, setShowPageNote] = useState(false);
+  const [pageNoteContent, setPageNoteContent] = useState("");
+
+  const reloadPinned = useCallback(async () => {
+    if (!pinnedBookId) return;
+    try {
+      setPinnedRows(await getHighlightsWithBook(pinnedBookId));
+    } catch (err) {
+      console.error("Failed to load book highlights:", err);
+      setPinnedRows([]);
+    }
+  }, [pinnedBookId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -94,13 +130,16 @@ export function NotesView({
       Promise.all([loadAllHighlightsWithBooks(500), loadStats()]).finally(() =>
         setIsLoading(false),
       );
+      void reloadPinned();
 
       return () => {
-        setSelectedBookId(null);
+        // A pinned view must keep its book: clearing the selection here used to
+        // drop the reader's notebook entry back to the library-wide list.
+        if (!pinnedBookId) setSelectedBookId(null);
         setEditingId(null);
         setSearchQuery("");
       };
-    }, [loadAllHighlightsWithBooks, loadStats]),
+    }, [loadAllHighlightsWithBooks, loadStats, reloadPinned, pinnedBookId]),
   );
 
   useEffect(() => {
@@ -124,6 +163,33 @@ export function NotesView({
 
   // Group by book — matching Tauri exactly
   const bookNotebooks = useMemo(() => {
+    // Pinned (reader's notebook entry): exactly one group, built from the book's
+    // own annotations plus the library metadata, so a book that has no
+    // annotations yet still renders as itself.
+    if (pinnedBookId) {
+      const rows = (pinnedRows ?? []).filter((h) => h.bookId === pinnedBookId);
+      const book = books.find((b) => b.id === pinnedBookId);
+      let notesCount = 0;
+      let latestAt = 0;
+      for (const h of rows) {
+        if (h.note) notesCount++;
+        if (h.createdAt > latestAt) latestAt = h.createdAt;
+      }
+      return [
+        {
+          bookId: pinnedBookId,
+          title: book?.meta.title || rows[0]?.bookTitle || t("notes.unknownBook", "未知书籍"),
+          author:
+            book?.meta.author || rows[0]?.bookAuthor || t("notes.unknownAuthor", "未知作者"),
+          coverUrl: book?.meta.coverUrl || rows[0]?.bookCoverUrl || null,
+          highlights: rows,
+          notesCount,
+          highlightsOnlyCount: rows.length - notesCount,
+          latestAt,
+        },
+      ];
+    }
+
     const grouped = new Map<
       string,
       {
@@ -160,15 +226,16 @@ export function NotesView({
     }
 
     return Array.from(grouped.values()).sort((a, b) => b.latestAt - a.latestAt);
-  }, [highlightsWithBooks, t]);
+  }, [highlightsWithBooks, t, pinnedBookId, pinnedRows, books]);
 
   // Resolve cover URLs using shared hook
   const resolvedCovers = useResolvedCovers(bookNotebooks);
 
   const selectedBook = useMemo(() => {
-    if (!selectedBookId) return null;
-    return bookNotebooks.find((b) => b.bookId === selectedBookId) || null;
-  }, [selectedBookId, bookNotebooks]);
+    const activeBookId = pinnedBookId ?? selectedBookId;
+    if (!activeBookId) return null;
+    return bookNotebooks.find((b) => b.bookId === activeBookId) || null;
+  }, [pinnedBookId, selectedBookId, bookNotebooks]);
 
   const { notesList, highlightsList } = useMemo(() => {
     if (!selectedBook) return { notesList: [], highlightsList: [] };
@@ -227,11 +294,21 @@ export function NotesView({
           style: "destructive",
           onPress: () => {
             updateHighlight(highlight.id, { note: undefined });
+            // Pinned rows are this screen's own snapshot of the book (they must
+            // not come from the library-wide list), so mirror the edit locally;
+            // the next focus reloads from the DB and reconciles.
+            if (pinnedBookId) {
+              setPinnedRows(
+                (prev) =>
+                  prev?.map((h) => (h.id === highlight.id ? { ...h, note: undefined } : h)) ??
+                  prev,
+              );
+            }
           },
         },
       ]);
     },
-    [updateHighlight, t],
+    [updateHighlight, t, pinnedBookId],
   );
 
   const handleDeleteHighlight = useCallback(
@@ -246,12 +323,15 @@ export function NotesView({
             style: "destructive",
             onPress: () => {
               removeHighlight(highlight.id);
+              if (pinnedBookId) {
+                setPinnedRows((prev) => prev?.filter((h) => h.id !== highlight.id) ?? prev);
+              }
             },
           },
         ],
       );
     },
-    [removeHighlight, t],
+    [removeHighlight, t, pinnedBookId],
   );
 
   const startEditNote = useCallback((highlight: HighlightWithBook) => {
@@ -262,16 +342,59 @@ export function NotesView({
   const saveNote = useCallback(
     (id: string) => {
       updateHighlight(id, { note: editNote || undefined });
+      if (pinnedBookId) {
+        setPinnedRows(
+          (prev) =>
+            prev?.map((h) => (h.id === id ? { ...h, note: editNote || undefined } : h)) ?? prev,
+        );
+      }
       setEditingId(null);
       setEditNote("");
     },
-    [updateHighlight, editNote],
+    [updateHighlight, editNote, pinnedBookId],
   );
 
   const cancelEdit = useCallback(() => {
     setEditingId(null);
     setEditNote("");
   }, []);
+
+  // Page-level note at the reader's current position（固定版式无文本层时的入口，
+  // 与桌面 NotebookPanel 的「+」同语义：text 为空、锚点用当前位置 CFI）。
+  const handleSavePageNote = useCallback(() => {
+    if (!pinnedBookId || !pageNoteAnchor?.cfi) return;
+    const mutation = createSelectionNoteMutation({
+      bookId: pinnedBookId,
+      cfi: pageNoteAnchor.cfi,
+      text: "",
+      note: pageNoteContent,
+      chapterTitle: pageNoteAnchor.chapterTitle,
+      defaultColor: defaultHighlightColor,
+    });
+    if (mutation.kind === "create") {
+      addHighlight(mutation.highlight);
+      // Optimistic: the store writes the row asynchronously, so keep the list
+      // immediate and let the next focus reload reconcile against the DB.
+      setPinnedRows((prev) => {
+        const row: HighlightWithBook = {
+          ...mutation.highlight,
+          bookTitle: selectedBook?.title ?? "",
+          bookAuthor: selectedBook?.author ?? "",
+          bookCoverUrl: selectedBook?.coverUrl ?? undefined,
+        };
+        return [...(prev ?? []), row];
+      });
+    }
+    setPageNoteContent("");
+    setShowPageNote(false);
+  }, [
+    pinnedBookId,
+    pageNoteAnchor,
+    pageNoteContent,
+    defaultHighlightColor,
+    addHighlight,
+    selectedBook,
+  ]);
 
   const handleExport = useCallback(
     async (format: ExportFormat) => {
@@ -304,8 +427,8 @@ export function NotesView({
   const totalNotes = stats?.highlightsWithNotes ?? 0;
   const totalBooks = stats?.totalBooks ?? 0;
 
-  // Loading
-  if (isLoading) {
+  // Loading — a pinned view is not blocked by the library-wide load.
+  if (isLoading && !isPinned) {
     return (
       <SafeAreaView style={[s.container, { backgroundColor: colors.background }]} edges={["top"]}>
         <View style={s.loadingWrap}>
@@ -316,8 +439,21 @@ export function NotesView({
     );
   }
 
-  // Empty
-  if (bookNotebooks.length === 0) {
+  // Pinned view: wait for this book's own rows (avoids flashing the empty state).
+  if (isPinned && pinnedRows === null) {
+    return (
+      <SafeAreaView style={[s.container, { backgroundColor: colors.background }]} edges={edges}>
+        <View style={s.loadingWrap}>
+          <View style={s.spinner} />
+          <Text style={s.loadingText}>{t("common.loading", "加载中...")}</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Empty — only the library-wide notebook list can be empty; a pinned view still
+  // renders its book (with its own empty state, plus the page-note entry).
+  if (!isPinned && bookNotebooks.length === 0) {
     return (
       <SafeAreaView
         style={[s.container, { backgroundColor: colors.background }]}
@@ -338,11 +474,12 @@ export function NotesView({
   }
 
   // Detail view
-  if (selectedBookId && selectedBook) {
+  if (selectedBook && (isPinned || selectedBookId)) {
     return (
       <SafeAreaView style={[s.container, { backgroundColor: colors.background }]} edges={edges}>
-        {/* Detail header - hide entirely when from reader and empty */}
-        {!(hideDetailHeader && selectedBook.highlights.length === 0) && (
+        {/* Detail header - hide entirely when from reader and empty (pinned keeps it:
+            the tabs and the page-note entry live here) */}
+        {!(hideDetailHeader && !isPinned && selectedBook.highlights.length === 0) && (
           <View style={s.detailHeader}>
             {!hideDetailHeader && (
               <View style={s.detailHeaderTop}>
@@ -429,6 +566,20 @@ export function NotesView({
                   onChangeText={setSearchQuery}
                 />
               </View>
+
+              {/* Page-note entry（对齐桌面 NotebookPanel 的「+」）：只有从阅读器
+                  进来时才带得到「当前位置」锚点，所以只在 pinned 模式显示。 */}
+              {isPinned && pageNoteAnchor?.cfi ? (
+                <TouchableOpacity
+                  style={s.exportBtn}
+                  onPress={() => {
+                    setPageNoteContent("");
+                    setShowPageNote(true);
+                  }}
+                >
+                  <PlusIcon size={16} color={colors.foreground} />
+                </TouchableOpacity>
+              ) : null}
             </View>
           </View>
         )}
@@ -509,6 +660,21 @@ export function NotesView({
             ))}
           </View>
         </Modal>
+        {/* Page-level note composer (pinned / reader entry only) */}
+        {isPinned && pageNoteAnchor?.cfi ? (
+          <PageNoteModal
+            visible={showPageNote}
+            cfi={pageNoteAnchor.cfi}
+            chapterTitle={pageNoteAnchor.chapterTitle}
+            content={pageNoteContent}
+            onContentChange={setPageNoteContent}
+            onCancel={() => {
+              setShowPageNote(false);
+              setPageNoteContent("");
+            }}
+            onSave={handleSavePageNote}
+          />
+        ) : null}
       </SafeAreaView>
     );
   }

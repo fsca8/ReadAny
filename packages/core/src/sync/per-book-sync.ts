@@ -674,15 +674,23 @@ export async function runPerBookSync(
         continue;
       }
 
-      const remoteMax = Math.max(entry.b ?? 0, entry.a ?? 0);
-      const localMax = Math.max(localB, localA);
-      if (!localRow && remoteMax === 0) continue;
-      if (localRow && remoteMax <= localMax && !forceApply) {
-        console.log(`[PerBookSync] book ${bookId} in sync (remote=${remoteMax}, local=${localMax})`);
+      // Compare the book row and the annotations SEPARATELY. `books.updated_at`
+      // is bumped by purely local actions — opening a book stamps
+      // `last_opened_at` through updateBook — so a device that merely opened the
+      // book has a book row newer than the index's `b` while its annotations may
+      // still be far behind `a`. Folding both into one max let that device report
+      // "in sync" and skip the pull forever, freezing its annotations.
+      const remoteBookNewer = (entry.b ?? 0) > localB;
+      const remoteAnnotationsNewer = (entry.a ?? 0) > localA;
+      if (!localRow && !remoteBookNewer && !remoteAnnotationsNewer) continue;
+      if (localRow && !remoteBookNewer && !remoteAnnotationsNewer && !forceApply) {
+        console.log(
+          `[PerBookSync] book ${bookId} in sync (book remote=${entry.b ?? 0} local=${localB}, annotations remote=${entry.a ?? 0} local=${localA})`,
+        );
         continue;
       }
       console.log(
-        `[PerBookSync] book ${bookId} pull (remote=${remoteMax}, local=${localMax}, localRow=${Boolean(localRow)})`,
+        `[PerBookSync] book ${bookId} pull (book ${entry.b ?? 0}/${localB}, annotations ${entry.a ?? 0}/${localA}, localRow=${Boolean(localRow)})`,
       );
 
       try {

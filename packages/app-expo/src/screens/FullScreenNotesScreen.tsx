@@ -11,7 +11,7 @@ export function FullScreenNotesScreen() {
   const colors = useColors();
   const navigation = useNavigation();
   const route = useRoute<RouteProp<RootStackParamList, "FullScreenNotes">>();
-  const { bookId } = route.params;
+  const { bookId, cfi, chapterTitle } = route.params;
   const { t } = useTranslation();
 
   return (
@@ -28,7 +28,13 @@ export function FullScreenNotesScreen() {
         </Text>
         <View style={{ width: 40 }} />
       </View>
-      <NotesView initialBookId={bookId} showBackButton={false} edges={[]} hideDetailHeader />
+      <NotesView
+        pinnedBookId={bookId}
+        pageNoteAnchor={cfi ? { cfi, chapterTitle } : null}
+        showBackButton={false}
+        edges={[]}
+        hideDetailHeader
+      />
     </SafeAreaView>
   );
 }

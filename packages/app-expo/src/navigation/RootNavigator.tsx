@@ -44,7 +44,7 @@ export type RootStackParamList = {
   About: undefined;
   Feedback: undefined;
   FeedbackDetail: { issueNumber: number; title: string };
-  FullScreenNotes: { bookId: string };
+  FullScreenNotes: { bookId: string; cfi?: string; chapterTitle?: string };
   FontSettings: undefined;
   WebDavImportBrowser: { source: WebDavImportSource };
 };

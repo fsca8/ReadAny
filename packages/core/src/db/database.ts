@@ -55,6 +55,7 @@ export {
   getHighlights,
   getAllHighlights,
   getAllHighlightsWithBooks,
+  getHighlightsWithBook,
   getHighlightStats,
   insertHighlight,
   updateHighlight,
