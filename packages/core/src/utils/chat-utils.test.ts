@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { convertToMessageV2 } from "./chat-utils";
+import { convertToMessageV2, groupThreadsByBook } from "./chat-utils";
 
 describe("convertToMessageV2", () => {
   it("preserves failed tool calls when reconstructing ordered parts", () => {
@@ -154,5 +154,42 @@ describe("convertToMessageV2", () => {
         citationIndex: 1,
       }),
     );
+  });
+});
+
+describe("groupThreadsByBook", () => {
+  const thread = (id: string, bookId: string | undefined, updatedAt: number) => ({
+    id,
+    bookId,
+    updatedAt,
+  });
+
+  it("ignores general threads and groups the rest by book", () => {
+    const groups = groupThreadsByBook([
+      thread("general-1", undefined, 500),
+      thread("a-1", "book-a", 100),
+      thread("b-1", "book-b", 200),
+    ]);
+
+    expect(groups.map((group) => group.bookId)).toEqual(["book-b", "book-a"]);
+    expect(groups[0].threads.map((item) => item.id)).toEqual(["b-1"]);
+  });
+
+  it("sorts books and their threads by most recent activity", () => {
+    const groups = groupThreadsByBook([
+      thread("a-old", "book-a", 100),
+      thread("a-new", "book-a", 900),
+      thread("b-new", "book-b", 500),
+    ]);
+
+    expect(groups.map((group) => group.bookId)).toEqual(["book-a", "book-b"]);
+    expect(groups[0].threads.map((item) => item.id)).toEqual(["a-new", "a-old"]);
+    expect(groups[0].latestThreadId).toBe("a-new");
+    expect(groups[0].latestUpdatedAt).toBe(900);
+  });
+
+  it("returns an empty list when there are no book threads", () => {
+    expect(groupThreadsByBook([])).toEqual([]);
+    expect(groupThreadsByBook([thread("general-1", undefined, 1)])).toEqual([]);
   });
 });

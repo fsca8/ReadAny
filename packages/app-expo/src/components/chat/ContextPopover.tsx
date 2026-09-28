@@ -49,6 +49,12 @@ export function ContextPopover() {
         <View style={s.sheet}>
           <View style={s.handle} />
           <Text style={s.title}>{t("chat.selectBooks", "选择书籍上下文")}</Text>
+          <Text style={s.hint}>
+            {t(
+              "chat.selectBooksForContextHint",
+              "选中的书会作为本次对话的上下文，AI 会检索这些书的内容来回答。",
+            )}
+          </Text>
 
           {books.length === 0 ? (
             <View style={s.emptyWrap}>
@@ -142,6 +148,13 @@ const makeStyles = (colors: ThemeColors) =>
       color: colors.foreground,
       paddingHorizontal: 20,
       marginBottom: 8,
+    },
+    hint: {
+      fontSize: fs.xs,
+      lineHeight: 16,
+      color: colors.mutedForeground,
+      paddingHorizontal: 20,
+      marginBottom: 10,
     },
     emptyWrap: {
       paddingVertical: 40,

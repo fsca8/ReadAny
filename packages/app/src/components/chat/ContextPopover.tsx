@@ -42,6 +42,12 @@ export function ContextPopover() {
           <p className="mb-1 px-2 py-1 text-xs font-medium text-muted-foreground">
             {t("chat.selectBooksForContext")}
           </p>
+          <p className="mb-1 px-2 text-[11px] leading-4 text-muted-foreground/80">
+            {t(
+              "chat.selectBooksForContextHint",
+              "选中的书会作为本次对话的上下文，AI 会检索这些书的内容来回答。",
+            )}
+          </p>
           <div className="max-h-60 overflow-y-auto">
             {books.map((book) => {
               const isSelected = selectedBooks.includes(book.id);

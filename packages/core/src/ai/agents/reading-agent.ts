@@ -15,6 +15,7 @@ import { estimateTokens } from "../../rag/chunker";
  * 5. System prompt from system-prompt.ts
  */
 import type { AIConfig, Book, SemanticContext, Skill } from "../../types";
+import type { ContextBook } from "../context-books";
 import { createChatModel, isSessionProxyConfig } from "../llm-provider";
 import { getReadingContextSnapshot } from "../reading-context-service";
 import { buildSessionProxySystemPrompt, buildSystemPrompt } from "../system-prompt";
@@ -581,6 +582,11 @@ export interface ReadingAgentOptions {
   semanticContext: SemanticContext | null;
   enabledSkills: Skill[];
   isVectorized: boolean;
+  /**
+   * Books the user pinned as conversation context. They are registered as extra
+   * retrieval sources for the turn (see ai/tools/book-scope.ts).
+   */
+  contextBooks?: ContextBook[];
   deepThinking?: boolean;
   spoilerFree?: boolean;
   memorySummary?: string;
@@ -592,8 +598,10 @@ export interface ReadingAgentOptions {
   /** Injected tool provider — returns available tools for the agent */
   getAvailableTools: (options: {
     bookId: string | null;
+    bookTitle?: string | null;
     isVectorized: boolean;
     enabledSkills: Skill[];
+    contextBooks?: ContextBook[];
   }) => ToolDefinition[];
   /** Abort signal for immediate cancellation */
   signal?: AbortSignal;
@@ -818,6 +826,7 @@ export async function* streamReadingAgent(
     semanticContext,
     enabledSkills,
     isVectorized,
+    contextBooks = [],
     deepThinking,
     spoilerFree,
     memorySummary,
@@ -837,7 +846,9 @@ export async function* streamReadingAgent(
   const isSessionProxy = isSessionProxyConfig(aiConfig);
   const questionCategory = detectQuestionCategory({
     userInput,
-    hasBookContext: !!effectiveBookId,
+    // 用户钉住的书（上下文书籍）也算「有内容上下文」，否则这个问题会被当成
+    // 书库类请求路由走，内容检索工具全被裁掉 —— 那钉书就形同虚设。
+    hasBookContext: !!effectiveBookId || contextBooks.length > 0,
     selectionActive,
   });
   const chapterReferenceState = {
@@ -886,8 +897,10 @@ export async function* streamReadingAgent(
       : filterToolsForQuestion({
           tools: getAvailableTools({
             bookId: effectiveBookId,
+            bookTitle: book?.meta.title ?? null,
             isVectorized,
             enabledSkills,
+            contextBooks,
           }),
           category: questionCategory,
           isVectorized,
@@ -908,6 +921,7 @@ export async function* streamReadingAgent(
       semanticContext,
       enabledSkills,
       isVectorized,
+      contextBooks,
       userLanguage: i18n.language || "en",
       spoilerFree,
       memorySummary,

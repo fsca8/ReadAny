@@ -213,6 +213,53 @@ export function convertToMessageV2(messages: any[]): MessageV2[] {
 }
 
 /**
+ * A book's conversations, newest first.
+ * `latestThreadId` is the thread a caller should activate when the user enters
+ * that book's chat.
+ */
+export interface BookThreadGroup<T> {
+  bookId: string;
+  threads: T[];
+  latestThreadId: string;
+  latestUpdatedAt: number;
+}
+
+/**
+ * Group threads by the book they belong to, so a chat surface can offer
+ * "book conversations" as first-class entries. General threads (no `bookId`)
+ * are ignored — they have their own list.
+ *
+ * Books are ordered by their most recent conversation, threads within a book
+ * the same way, so both lists are stable regardless of input order.
+ */
+export function groupThreadsByBook<T extends { id: string; bookId?: string; updatedAt: number }>(
+  threads: T[],
+): BookThreadGroup<T>[] {
+  const byBook = new Map<string, T[]>();
+  for (const thread of threads) {
+    if (!thread.bookId) continue;
+    const existing = byBook.get(thread.bookId);
+    if (existing) {
+      existing.push(thread);
+    } else {
+      byBook.set(thread.bookId, [thread]);
+    }
+  }
+
+  return [...byBook.entries()]
+    .map(([bookId, bookThreads]) => {
+      const sorted = [...bookThreads].sort((a, b) => b.updatedAt - a.updatedAt);
+      return {
+        bookId,
+        threads: sorted,
+        latestThreadId: sorted[0].id,
+        latestUpdatedAt: sorted[0].updatedAt,
+      };
+    })
+    .sort((a, b) => b.latestUpdatedAt - a.latestUpdatedAt);
+}
+
+/**
  * Merge streaming message with store messages, avoiding duplicate keys.
  * When streaming, filter out any store message with the same ID as currentMessage.
  */

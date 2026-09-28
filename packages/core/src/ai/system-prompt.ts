@@ -9,6 +9,7 @@
  */
 import type { Book, SemanticContext, Skill } from "../types";
 import { getBookProgressPercent } from "../utils/book-progress";
+import type { ContextBook } from "./context-books";
 
 type ReadingQuestionCategory =
   | "general_chat"
@@ -32,6 +33,8 @@ interface PromptContext {
   selectionActive?: boolean;
   routeHint?: string;
   allowedToolNames?: string[];
+  /** Books the user pinned as conversation context (see ContextPopover). */
+  contextBooks?: ContextBook[];
 }
 
 /** Build the full system prompt from context */
@@ -39,6 +42,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   const sections: string[] = [
     buildRoleSection(),
     buildBookContextSection(ctx.book),
+    buildContextBooksSection(ctx.contextBooks),
     buildMemorySection(ctx.memorySummary),
     buildSemanticSection(ctx.semanticContext),
     buildRouteSection(ctx.questionCategory, ctx.selectionActive, ctx.routeHint),
@@ -85,6 +89,30 @@ function buildBookContextSection(book: Book | null): string {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * Books the user pinned in the AI chat's context picker. Pinning is not decorative:
+ * their content tools are registered for the turn behind a `book` selector
+ * parameter (see ai/tools/book-scope.ts), so the prompt has to tell the model that
+ * these books are answerable material — and how to reach them.
+ */
+function buildContextBooksSection(books?: ContextBook[]): string {
+  if (!books || books.length === 0) return "";
+  const lines = books.map((book, index) => {
+    const author = book.author?.trim() ? ` — ${book.author}` : "";
+    const access = book.isVectorized
+      ? "indexed: use ragSearch / ragToc / ragContext / summarize"
+      : "not indexed: use fallbackSearch / fallbackToc / fallbackChapterContext";
+    return `${index + 1}. 《${book.title}》${author} (${access})`;
+  });
+  return [
+    "## Context Books (user-pinned)",
+    "The user pinned these books as context for this conversation. They are part of the material you must answer from — retrieve their content with tools, never from memory:",
+    ...lines,
+    "",
+    'Content tools take a "book" parameter (title or id) to target one of these books; without it they use the current book. Register a citation for every quote so the user can jump to the location.',
+  ].join("\n");
 }
 
 function compactText(value: string, maxLength: number): string {

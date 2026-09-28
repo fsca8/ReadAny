@@ -732,6 +732,91 @@ describe("streamReadingAgent tool registration", () => {
     expect(toolNames).not.toContain("summarize");
   });
 
+  it("keeps content tools reachable when the user pinned books as context", async () => {
+    let capturedTools: Array<{ name: string; schema: Parameters<typeof z.toJSONSchema>[0] }> = [];
+    let capturedSystem = "";
+    createReactAgentMock.mockImplementation((config) => {
+      capturedTools = config.tools;
+      capturedSystem = (config.prompt || config.systemPrompt || "") as string;
+      return {
+        streamEvents: vi.fn(() => ({
+          [Symbol.asyncIterator]: async function* () {
+            // no-op stream
+          },
+        })),
+      };
+    });
+
+    for await (const event of streamReadingAgent(
+      {
+        aiConfig: makeAIConfig(),
+        book: null,
+        bookId: null,
+        semanticContext: null,
+        enabledSkills: [],
+        isVectorized: false,
+        contextBooks: [
+          { id: "b1", title: "Clean Code", author: "Robert C. Martin", isVectorized: true },
+          { id: "b2", title: "重构", isVectorized: false },
+        ],
+        getAvailableTools,
+      },
+      "《Clean Code》和《重构》对命名的看法有什么不同",
+    )) {
+      void event;
+    }
+
+    const toolNames = capturedTools.map((tool) => tool.name);
+    // Pinned books are retrieval sources: indexed → RAG, non-indexed → fallback.
+    expect(toolNames).toContain("ragSearch");
+    expect(toolNames).toContain("fallbackSearch");
+    expect(toolNames).toContain("addCitation");
+    // No current book → no reading-position tools.
+    expect(toolNames).not.toContain("getCurrentChapter");
+    // The pinned books are announced to the model…
+    expect(capturedSystem).toContain("Clean Code");
+    // …and the retrieval tools really carry the `book` selector.
+    const ragSearch = capturedTools.find((tool) => tool.name === "ragSearch");
+    if (!ragSearch) throw new Error("ragSearch was not registered");
+    const ragSearchSchema = z.toJSONSchema(ragSearch.schema) as {
+      properties?: Record<string, unknown>;
+    };
+    expect(ragSearchSchema.properties).toHaveProperty("book");
+  });
+
+  it("still treats a book-less chat without pinned books as a library request", async () => {
+    let capturedTools: Array<{ name: string }> = [];
+    createReactAgentMock.mockImplementation((config) => {
+      capturedTools = config.tools;
+      return {
+        streamEvents: vi.fn(() => ({
+          [Symbol.asyncIterator]: async function* () {
+            // no-op stream
+          },
+        })),
+      };
+    });
+
+    for await (const event of streamReadingAgent(
+      {
+        aiConfig: makeAIConfig(),
+        book: null,
+        bookId: null,
+        semanticContext: null,
+        enabledSkills: [],
+        isVectorized: false,
+        getAvailableTools,
+      },
+      "《Clean Code》和《重构》对命名的看法有什么不同",
+    )) {
+      void event;
+    }
+
+    const toolNames = capturedTools.map((tool) => tool.name);
+    expect(toolNames).not.toContain("ragSearch");
+    expect(toolNames).not.toContain("fallbackSearch");
+  });
+
   it("reuses duplicate search requests within the same turn", async () => {
     const searchCalls: string[] = [];
     const searchTool: ToolDefinition = {

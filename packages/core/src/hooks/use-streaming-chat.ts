@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { maybeCompressThreadMemory } from "../ai/chat-memory";
+import type { ContextBook } from "../ai/context-books";
 import { getBuiltinSkills } from "../ai/skills/builtin-skills";
 import { StreamingChat, createMessageId } from "../ai/streaming";
 import {
@@ -10,6 +11,7 @@ import {
 import { getAvailableTools } from "../ai/tools";
 import { getBook, getSkills as getDbSkills } from "../db/database";
 import i18n from "../i18n";
+import { useChatReaderStore } from "../stores/chat-reader-store";
 import { getChatStreamingKey, useChatStore } from "../stores/chat-store";
 import { useSettingsStore } from "../stores/settings-store";
 import type {
@@ -106,6 +108,40 @@ async function resolveFreshBook(
     console.warn("[AI] Failed to refresh book state before streaming:", err);
     return fallback ?? null;
   }
+}
+
+/**
+ * Books the user pinned in the AI chat's context picker (ContextPopover) →
+ * {@link ContextBook} refs for the turn. Resolved fresh on every send, so a book
+ * that just finished vectorizing immediately gets its RAG tools, and a book that
+ * was deleted meanwhile is simply dropped instead of breaking the turn.
+ */
+async function resolvePinnedContextBooks(
+  currentBookId: string | undefined,
+): Promise<ContextBook[]> {
+  const selectedIds = useChatReaderStore.getState().selectedBooks;
+  if (selectedIds.length === 0) return [];
+
+  const resolved = await Promise.all(
+    selectedIds.map(async (bookId): Promise<ContextBook | null> => {
+      if (bookId === currentBookId) return null;
+      try {
+        const book = await getBook(bookId);
+        if (!book) return null;
+        return {
+          id: book.id,
+          title: book.meta.title,
+          author: book.meta.author,
+          isVectorized: !!book.isVectorized,
+        };
+      } catch (err) {
+        console.warn("[AI] Failed to load pinned context book:", bookId, err);
+        return null;
+      }
+    }),
+  );
+
+  return resolved.filter((book): book is ContextBook => book !== null);
 }
 
 export function useStreamingChat(options?: StreamingChatOptions) {
@@ -349,12 +385,14 @@ export function useStreamingChat(options?: StreamingChatOptions) {
 
         const streamBook = await resolveFreshBook(bookId, options?.book);
         const streamIsVectorized = streamBook?.isVectorized ?? false;
+        const contextBooks = await resolvePinnedContextBooks(bookId);
 
         await stream.stream({
           thread: threadForStream,
           book: streamBook,
           bookId,
           semanticContext: options?.semanticContext || null,
+          contextBooks,
           enabledSkills,
           isVectorized: streamIsVectorized,
           aiConfig: aiConfigOverride || aiConfig,

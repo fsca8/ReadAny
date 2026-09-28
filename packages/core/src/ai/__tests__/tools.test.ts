@@ -195,6 +195,74 @@ describe("getAvailableTools", () => {
     expect(skillTool.parameters).toHaveProperty("input");
     expect(skillTool.parameters).toHaveProperty("reasoning");
   });
+
+  it("registers pinned context books as retrieval sources without a current book", () => {
+    const tools = getAvailableTools({
+      bookId: null,
+      isVectorized: false,
+      enabledSkills: [],
+      contextBooks: [
+        { id: "b1", title: "Clean Code", author: "Robert C. Martin", isVectorized: true },
+        { id: "b2", title: "Refactoring", isVectorized: false },
+      ],
+    });
+    const names = tools.map((tool) => tool.name);
+
+    // Blanket rule: no current book → reading-position tools stay out.
+    expect(names).not.toContain("getCurrentChapter");
+    expect(names).not.toContain("getSelection");
+    // The pinned books' own sets are registered: one indexed, one not.
+    expect(names).toContain("ragSearch");
+    expect(names).toContain("fallbackSearch");
+    expect(findTool(tools, "ragSearch").parameters.book).toBeDefined();
+  });
+
+  it("exposes a book selector only when several books are in play", () => {
+    const single = getAvailableTools({ bookId: "book-1", isVectorized: true, enabledSkills: [] });
+    expect(findTool(single, "ragSearch").parameters).not.toHaveProperty("book");
+
+    const pinned = getAvailableTools({
+      bookId: "book-1",
+      bookTitle: "Test Book",
+      isVectorized: true,
+      enabledSkills: [],
+      contextBooks: [{ id: "b2", title: "Refactoring", isVectorized: true }],
+    });
+    expect(findTool(pinned, "ragSearch").parameters.book).toBeDefined();
+  });
+
+  it("ignores a pinned book that is already the current book", () => {
+    const tools = getAvailableTools({
+      bookId: "book-1",
+      isVectorized: true,
+      enabledSkills: [],
+      contextBooks: [{ id: "book-1", title: "Test Book", isVectorized: true }],
+    });
+    expect(findTool(tools, "ragSearch").parameters).not.toHaveProperty("book");
+  });
+
+  it("keeps the current book as the default retrieval target of pinned tools", async () => {
+    vi.mocked(search).mockResolvedValue([]);
+    const tools = getAvailableTools({
+      bookId: "book-1",
+      bookTitle: "Test Book",
+      isVectorized: true,
+      enabledSkills: [],
+      contextBooks: [{ id: "b2", title: "Refactoring", isVectorized: true }],
+    });
+    const ragSearch = findTool(tools, "ragSearch");
+
+    await ragSearch.execute({ query: "naming" });
+    expect(search).toHaveBeenLastCalledWith(expect.objectContaining({ bookId: "book-1" }));
+
+    await ragSearch.execute({ query: "naming", book: "Refactoring" });
+    expect(search).toHaveBeenLastCalledWith(expect.objectContaining({ bookId: "b2" }));
+
+    const unknown = (await ragSearch.execute({ query: "naming", book: "Nope" })) as {
+      error: string;
+    };
+    expect(unknown.error).toContain("Nope");
+  });
 });
 
 // ============================================

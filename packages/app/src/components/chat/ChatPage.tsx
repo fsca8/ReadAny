@@ -5,13 +5,13 @@ import { ConfigGuideDialog, type ConfigGuideType } from "@/components/shared/Con
 import { useStreamingChat } from "@/hooks/use-streaming-chat";
 import { getBook as getBookRecord } from "@/lib/db/database";
 import { openDesktopBook } from "@/lib/library/open-book";
-import { useChatReaderStore } from "@/stores/chat-reader-store";
 import { useChatStore } from "@/stores/chat-store";
 import { useLibraryStore } from "@/stores/library-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { getPlatformService } from "@readany/core/services";
-import type { CitationPart } from "@readany/core/types";
+import type { Book, CitationPart, Thread } from "@readany/core/types";
 import {
+  type BookThreadGroup,
   convertToMessageV2,
   exportChatAsJSON,
   exportChatAsMarkdown,
@@ -19,12 +19,14 @@ import {
   formatRelativeTimeShort,
   getExportFilename,
   getMonthLabel,
+  groupThreadsByBook,
   groupThreadsByTime,
   mergeMessagesWithStreaming,
   providerRequiresApiKey,
 } from "@readany/core/utils";
 import {
   BookOpen,
+  Check,
   ClipboardCopy,
   Download,
   FileJson,
@@ -33,7 +35,9 @@ import {
   Library,
   Lightbulb,
   MessageCirclePlus,
+  Plus,
   ScrollText,
+  Search,
   Trash2,
   X,
 } from "lucide-react";
@@ -45,21 +49,107 @@ import { ContextPopover } from "./ContextPopover";
 import { MessageList } from "./MessageList";
 import { ModelSelector } from "./ModelSelector";
 
+function ThreadRow({
+  thread,
+  active,
+  nested = false,
+  onSelect,
+  onRemove,
+}: {
+  thread: Thread;
+  active: boolean;
+  nested?: boolean;
+  onSelect: () => void;
+  onRemove: () => void;
+}) {
+  const { t } = useTranslation();
+  const lastMessage =
+    thread.messages.length > 0 ? thread.messages[thread.messages.length - 1] : null;
+  const preview = lastMessage?.content?.slice(0, nested ? 60 : 80) || "";
+
+  return (
+    <div
+      onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      className={`group flex cursor-pointer items-start gap-2 rounded-lg py-2.5 transition-colors ${
+        nested ? "pl-8 pr-3" : "px-3"
+      } ${active ? "bg-primary/10 text-primary" : "text-foreground hover:bg-muted"}`}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-sm font-medium">{thread.title || t("chat.newChat")}</span>
+          <span className="shrink-0 text-[10px] text-muted-foreground/50">
+            {formatRelativeTimeShort(thread.updatedAt, t)}
+          </span>
+        </div>
+        {preview && <p className="mt-0.5 truncate text-xs text-muted-foreground">{preview}</p>}
+      </div>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onRemove();
+        }}
+        className="mt-0.5 hidden shrink-0 rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive group-hover:block"
+      >
+        <Trash2 className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+interface ThreadsSidebarProps {
+  open: boolean;
+  onClose: () => void;
+  books: Book[];
+  generalThreads: Thread[];
+  bookGroups: BookThreadGroup<Thread>[];
+  activeContextBookId: string | null;
+  activeThreadId: string | null;
+  bookTitleOf: (bookId: string) => string;
+  /** Enter a book's chat: activate its latest conversation (or an empty one). */
+  onEnterBookChat: (bookId: string) => void;
+  onSelectBookThread: (bookId: string, threadId: string) => void;
+  onSelectGeneralThread: (threadId: string) => void;
+}
+
 function ThreadsSidebar({
   open,
   onClose,
-  onSelect,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onSelect: (threadId: string) => void;
-}) {
+  books,
+  generalThreads,
+  bookGroups,
+  activeContextBookId,
+  activeThreadId,
+  bookTitleOf,
+  onEnterBookChat,
+  onSelectBookThread,
+  onSelectGeneralThread,
+}: ThreadsSidebarProps) {
   const { t } = useTranslation();
-  const getThreadsForContext = useChatStore((s) => s.getThreadsForContext);
-  const getActiveThreadId = useChatStore((s) => s.getActiveThreadId);
   const removeThread = useChatStore((s) => s.removeThread);
-  const generalThreads = getThreadsForContext();
-  const activeThreadId = getActiveThreadId();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [bookQuery, setBookQuery] = useState("");
+
+  const filteredBooks = useMemo(() => {
+    const keyword = bookQuery.trim().toLowerCase();
+    if (!keyword) return books;
+    return books.filter((book) =>
+      `${book.meta.title} ${book.meta.author ?? ""}`.toLowerCase().includes(keyword),
+    );
+  }, [books, bookQuery]);
+
+  const handlePickBook = (bookId: string) => {
+    onEnterBookChat(bookId);
+    setPickerOpen(false);
+    setBookQuery("");
+    onClose();
+  };
 
   return (
     <div
@@ -81,8 +171,114 @@ function ThreadsSidebar({
           </button>
         </div>
         <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto">
+          {/* Book conversations — one entry per book, expandable to its threads */}
+          <div className="flex items-center justify-between px-3 py-1">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              {t("chat.bookChats")}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPickerOpen((prev) => !prev)}
+              className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Plus className="size-3" />
+              {t("chat.selectBook")}
+            </button>
+          </div>
+
+          {pickerOpen && (
+            <div className="mx-2 mb-1 rounded-lg border border-border/60 bg-background p-1.5">
+              <div className="relative mb-1">
+                <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  value={bookQuery}
+                  onChange={(e) => setBookQuery(e.target.value)}
+                  placeholder={t("library.searchPlaceholder")}
+                  className="w-full rounded-md border border-input bg-background py-1 pl-7 pr-2 text-xs text-foreground outline-none focus:border-primary"
+                />
+              </div>
+              <div className="max-h-48 overflow-y-auto">
+                {filteredBooks.map((book) => (
+                  <button
+                    key={book.id}
+                    type="button"
+                    onClick={() => handlePickBook(book.id)}
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-muted"
+                  >
+                    <BookOpen className="size-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{book.meta.title}</span>
+                    {book.id === activeContextBookId && (
+                      <Check className="ml-auto size-3.5 shrink-0 text-primary" />
+                    )}
+                  </button>
+                ))}
+                {filteredBooks.length === 0 && (
+                  <p className="px-2 py-4 text-center text-[11px] text-muted-foreground">
+                    {t("chat.noBooksInLibrary")}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {bookGroups.length === 0 ? (
+            <p className="px-3 py-2 text-[11px] text-muted-foreground">{t("chat.noBookThreads")}</p>
+          ) : (
+            bookGroups.map((group) => {
+              const isActiveBook = group.bookId === activeContextBookId;
+              return (
+                <div key={group.bookId}>
+                  <div
+                    onClick={() => {
+                      onEnterBookChat(group.bookId);
+                      onClose();
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onEnterBookChat(group.bookId);
+                        onClose();
+                      }
+                    }}
+                    className={`flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 transition-colors ${
+                      isActiveBook ? "bg-primary/10 text-primary" : "text-foreground hover:bg-muted"
+                    }`}
+                  >
+                    <BookOpen className="size-3.5 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                      {bookTitleOf(group.bookId)}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground/60">
+                      {t("chat.threadsCount", { count: group.threads.length })}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground/50">
+                      {formatRelativeTimeShort(group.latestUpdatedAt, t)}
+                    </span>
+                  </div>
+                  {isActiveBook &&
+                    group.threads.map((thread) => (
+                      <ThreadRow
+                        key={thread.id}
+                        thread={thread}
+                        nested
+                        active={thread.id === activeThreadId}
+                        onSelect={() => {
+                          onSelectBookThread(group.bookId, thread.id);
+                          onClose();
+                        }}
+                        onRemove={() => removeThread(thread.id)}
+                      />
+                    ))}
+                </div>
+              );
+            })
+          )}
+
+          <div className="mt-1 px-3 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            {t("chat.generalChats")}
+          </div>
           {generalThreads.length === 0 && (
-            <p className="py-8 text-center text-xs text-muted-foreground">
+            <p className="py-4 text-center text-xs text-muted-foreground">
               {t("chat.noConversations")}
             </p>
           )}
@@ -121,56 +317,18 @@ function ThreadsSidebar({
                   <div className="px-3 py-1 text-[10px] font-medium text-muted-foreground">
                     {label}
                   </div>
-                  {threads.map((thread) => {
-                    const lastMsg =
-                      thread.messages.length > 0
-                        ? thread.messages[thread.messages.length - 1]
-                        : null;
-                    const preview = lastMsg?.content?.slice(0, 80) || "";
-                    return (
-                      <div
-                        key={thread.id}
-                        onClick={() => {
-                          onSelect(thread.id);
-                          onClose();
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            onSelect(thread.id);
-                            onClose();
-                          }
-                        }}
-                        className={`group flex cursor-pointer items-start gap-2 rounded-lg px-3 py-2.5 transition-colors ${thread.id === activeThreadId ? "bg-primary/10 text-primary" : "text-foreground hover:bg-muted"}`}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-1.5">
-                            <span className="truncate text-sm font-medium">
-                              {thread.title || t("chat.newChat")}
-                            </span>
-                            <span className="shrink-0 text-[10px] text-muted-foreground/50">
-                              {formatRelativeTimeShort(thread.updatedAt, t)}
-                            </span>
-                          </div>
-                          {preview && (
-                            <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                              {preview}
-                            </p>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            removeThread(thread.id);
-                          }}
-                          className="mt-0.5 hidden shrink-0 rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive group-hover:block"
-                        >
-                          <Trash2 className="size-3.5" />
-                        </button>
-                      </div>
-                    );
-                  })}
+                  {threads.map((thread) => (
+                    <ThreadRow
+                      key={thread.id}
+                      thread={thread}
+                      active={thread.id === activeThreadId}
+                      onSelect={() => {
+                        onSelectGeneralThread(thread.id);
+                        onClose();
+                      }}
+                      onRemove={() => removeThread(thread.id)}
+                    />
+                  ))}
                 </div>
               );
             });
@@ -181,14 +339,28 @@ function ThreadsSidebar({
   );
 }
 
-function EmptyState({ onSuggestionClick }: { onSuggestionClick: (text: string) => void }) {
+function EmptyState({
+  onSuggestionClick,
+  bookTitle,
+}: {
+  onSuggestionClick: (text: string) => void;
+  /** Set when the page is scoped to a book, so prompts stay book-shaped. */
+  bookTitle?: string | null;
+}) {
   const { t } = useTranslation();
-  const SUGGESTIONS = [
-    { key: "chat.suggestions.summarizeReading", icon: ScrollText },
-    { key: "chat.suggestions.analyzeArguments", icon: Lightbulb },
-    { key: "chat.suggestions.findConcepts", icon: Library },
-    { key: "chat.suggestions.generateNotes", icon: BookOpen },
-  ] as const;
+  const SUGGESTIONS: { key: string; icon: typeof BookOpen }[] = bookTitle
+    ? [
+        { key: "chat.suggestions.summarizeBook", icon: ScrollText },
+        { key: "chat.suggestions.analyzeArguments", icon: Lightbulb },
+        { key: "chat.suggestions.explainConcepts", icon: Library },
+        { key: "chat.suggestions.generateNotes", icon: BookOpen },
+      ]
+    : [
+        { key: "chat.suggestions.summarizeReading", icon: ScrollText },
+        { key: "chat.suggestions.analyzeArguments", icon: Lightbulb },
+        { key: "chat.suggestions.findConcepts", icon: Library },
+        { key: "chat.suggestions.generateNotes", icon: BookOpen },
+      ];
 
   return (
     <div className="flex h-full w-full select-none items-center justify-center overflow-y-auto p-6">
@@ -196,8 +368,12 @@ function EmptyState({ onSuggestionClick }: { onSuggestionClick: (text: string) =
         <img src="/think.svg" alt="" className="h-52 w-52 shrink-0 dark:invert" />
         <div className="flex flex-col gap-6">
           <div>
-            <h1 className="text-2xl font-semibold text-foreground">{t("chat.howCanIHelp")}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">{t("chat.askAboutBooks")}</p>
+            <h1 className="text-2xl font-semibold text-foreground">
+              {bookTitle ? t("chat.bookChatContext", { title: bookTitle }) : t("chat.howCanIHelp")}
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {bookTitle ? t("chat.askBookPlaceholder") : t("chat.askAboutBooks")}
+            </p>
           </div>
           <div>
             <h2 className="mb-2 text-sm font-medium text-muted-foreground">
@@ -230,12 +406,20 @@ export function ChatPage() {
   const loadAllThreads = useChatStore((s) => s.loadAllThreads);
   const createThread = useChatStore((s) => s.createThread);
   const setGeneralActiveThread = useChatStore((s) => s.setGeneralActiveThread);
-  const getActiveThreadId = useChatStore((s) => s.getActiveThreadId);
-  const { bookTitle } = useChatReaderStore();
+  const setBookActiveThread = useChatStore((s) => s.setBookActiveThread);
+  const generalActiveThreadId = useChatStore((s) => s.generalActiveThreadId);
+  const bookActiveThreadIds = useChatStore((s) => s.bookActiveThreadIds);
   const books = useLibraryStore((s) => s.books);
 
-  // /chats page should only use general threads - always pass undefined for bookId
-  const { isStreaming, currentMessage, currentStep, sendMessage, stopStream } = useStreamingChat();
+  // null = general chat. Set to a book id to talk to that book (same context model
+  // as the reader's chat panel), so existing book conversations are reachable here.
+  const [contextBookId, setContextBookId] = useState<string | null>(null);
+  const contextBook = contextBookId ? books.find((book) => book.id === contextBookId) : undefined;
+
+  const { isStreaming, currentMessage, currentStep, sendMessage, stopStream } = useStreamingChat({
+    book: contextBook ?? null,
+    bookId: contextBookId ?? undefined,
+  });
 
   const [showThreads, setShowThreads] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -260,8 +444,53 @@ export function ChatPage() {
     return () => document.removeEventListener("mousedown", handler);
   }, [showExportMenu]);
 
-  const activeThreadId = getActiveThreadId();
-  const activeThread = threads.find((t) => t.id === activeThreadId);
+  const generalThreads = useMemo(() => threads.filter((thread) => !thread.bookId), [threads]);
+  const bookGroups = useMemo(() => groupThreadsByBook(threads), [threads]);
+  const activeThreadId = contextBookId
+    ? bookActiveThreadIds[contextBookId] || null
+    : generalActiveThreadId;
+  const activeThread = threads.find((thread) => thread.id === activeThreadId);
+  const contextThreads = useMemo(
+    () => (contextBookId ? threads.filter((thread) => thread.bookId === contextBookId) : []),
+    [threads, contextBookId],
+  );
+
+  const bookTitleOf = useCallback(
+    (bookId: string) =>
+      books.find((book) => book.id === bookId)?.meta.title ||
+      threads.find((thread) => thread.bookId === bookId && thread.title)?.title ||
+      t("chat.deletedBook"),
+    [books, threads, t],
+  );
+
+  // Entering a book shows its latest conversation; an empty list stays empty and the
+  // first message creates the thread (same lazy behaviour as the reader panel).
+  useEffect(() => {
+    if (contextBookId && !activeThreadId && contextThreads.length > 0) {
+      const latest = [...contextThreads].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      setBookActiveThread(contextBookId, latest.id);
+    }
+  }, [contextBookId, activeThreadId, contextThreads, setBookActiveThread]);
+
+  const handleEnterBookChat = useCallback((bookId: string) => {
+    setContextBookId(bookId);
+  }, []);
+
+  const handleSelectBookThread = useCallback(
+    (bookId: string, threadId: string) => {
+      setContextBookId(bookId);
+      setBookActiveThread(bookId, threadId);
+    },
+    [setBookActiveThread],
+  );
+
+  const handleSelectGeneralThread = useCallback(
+    (threadId: string) => {
+      setContextBookId(null);
+      setGeneralActiveThread(threadId);
+    },
+    [setGeneralActiveThread],
+  );
 
   const handleSend = useCallback(
     async (content: string, deepThinking = false, spoilerFree = false) => {
@@ -273,20 +502,26 @@ export function ChatPage() {
         return;
       }
 
-      // /chats page should only use general threads (no bookId)
+      const bookId = contextBookId ?? undefined;
       if (!activeThreadId) {
-        await createThread(undefined, content.slice(0, 50));
-        setTimeout(() => sendMessage(content, undefined, deepThinking, spoilerFree), 50);
+        await createThread(bookId, content.slice(0, 50));
+        setTimeout(() => sendMessage(content, bookId, deepThinking, spoilerFree), 50);
       } else {
-        sendMessage(content, undefined, deepThinking, spoilerFree);
+        sendMessage(content, bookId, deepThinking, spoilerFree);
       }
     },
-    [activeThreadId, createThread, sendMessage],
+    [activeThreadId, contextBookId, createThread, sendMessage],
   );
 
-  const handleNewThread = useCallback(() => {
-    setGeneralActiveThread(null);
-  }, [setGeneralActiveThread]);
+  const handleNewThread = useCallback(async () => {
+    if (!contextBookId) {
+      setGeneralActiveThread(null);
+      return;
+    }
+    // Keep the reader panel's behaviour: don't stack empty book conversations.
+    if (activeThread && activeThread.messages.length === 0) return;
+    await createThread(contextBookId);
+  }, [contextBookId, activeThread, createThread, setGeneralActiveThread]);
 
   const handleCitationClick = useCallback(
     async (citation: CitationPart) => {
@@ -369,10 +604,18 @@ export function ChatPage() {
       <ThreadsSidebar
         open={showThreads}
         onClose={() => setShowThreads(false)}
-        onSelect={(id) => setGeneralActiveThread(id)}
+        books={books}
+        generalThreads={generalThreads}
+        bookGroups={bookGroups}
+        activeContextBookId={contextBookId}
+        activeThreadId={activeThreadId}
+        bookTitleOf={bookTitleOf}
+        onEnterBookChat={handleEnterBookChat}
+        onSelectBookThread={handleSelectBookThread}
+        onSelectGeneralThread={handleSelectGeneralThread}
       />
       <div className="relative flex h-11 shrink-0 items-center justify-between border-b px-4">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"
             onClick={() => setShowThreads(true)}
@@ -381,9 +624,20 @@ export function ChatPage() {
           >
             <History className="size-4" />
           </button>
-          {bookTitle && (
-            <span className="text-xs text-muted-foreground">
-              {t("chat.context")}: <span className="font-medium text-foreground">{bookTitle}</span>
+          {contextBookId && (
+            <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+              <BookOpen className="size-3.5 shrink-0 text-primary" />
+              <span className="truncate font-medium text-foreground">
+                {bookTitleOf(contextBookId)}
+              </span>
+              <button
+                type="button"
+                onClick={() => setContextBookId(null)}
+                className="shrink-0 rounded p-0.5 transition-colors hover:bg-muted hover:text-foreground"
+                title={t("chat.exitBookContext")}
+              >
+                <X className="size-3.5" />
+              </button>
             </span>
           )}
         </div>
@@ -458,13 +712,21 @@ export function ChatPage() {
               onCitationClick={handleCitationClick}
             />
           ) : (
-            <EmptyState onSuggestionClick={handleSend} />
+            <EmptyState
+              onSuggestionClick={handleSend}
+              bookTitle={contextBookId ? bookTitleOf(contextBookId) : null}
+            />
           )}
         </div>
 
         {/* Input always at bottom with consistent position */}
         <div className="shrink-0 px-4 pb-3 pt-2">
-          <ChatInput onSend={handleSend} onStop={stopStream} isStreaming={isStreaming} />
+          <ChatInput
+            onSend={handleSend}
+            onStop={stopStream}
+            isStreaming={isStreaming}
+            placeholder={contextBookId ? t("chat.askBookPlaceholder") : undefined}
+          />
         </div>
       </div>
 

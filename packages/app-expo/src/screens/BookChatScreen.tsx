@@ -467,7 +467,7 @@ export function BookChatScreen({ route, navigation }: Props) {
             </View>
 
             <Text style={s.headerTitle} numberOfLines={1}>
-              {t("chat.aiAssistant", "AI 助手")}
+              {book?.meta.title || t("chat.aiAssistant", "AI 助手")}
             </Text>
 
             <View style={s.headerRight}>

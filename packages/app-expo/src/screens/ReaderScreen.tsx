@@ -1872,6 +1872,13 @@ export function ReaderScreen({ route, navigation }: Props) {
               </TouchableOpacity>
               <TouchableOpacity
                 style={s.bottomDockBtn}
+                onPress={() => navigation.navigate("BookChat", { bookId })}
+              >
+                <BotIcon size={bottomDockIconSize} color={colors.foreground} />
+                <Text style={s.bottomDockLabel}>{t("tabs.ai", "AI")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={s.bottomDockBtn}
                 onPress={() => {
                   setShowSearch(true);
                   setShowControls(false);

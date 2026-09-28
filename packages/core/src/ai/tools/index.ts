@@ -13,6 +13,7 @@
  * - Context Tools: getCurrentChapter, getSelection, getReadingProgress, getRecentHighlights, getSurroundingContext
  */
 import type { Skill } from "../../types";
+import { type ContextBook, dedupeContextBooks } from "../context-books";
 import {
   createAnalyzeArgumentsTool,
   createCompareSectionsTool,
@@ -21,6 +22,7 @@ import {
   createSummarizeTool,
 } from "./analysis-tools";
 import { createAddCitationTool, createGetAnnotationsTool } from "./annotation-tools";
+import { type BookToolEntry, mergeBookScopedTools } from "./book-scope";
 import { getContextTools } from "./context-tools";
 import {
   createFallbackChapterContextTool,
@@ -70,51 +72,77 @@ function getGeneralTools(): ToolDefinition[] {
   ];
 }
 
+/** Content tools for one book: retrieval + analysis (+ annotations). */
+function getContentTools(bookId: string, isVectorized: boolean): ToolDefinition[] {
+  if (isVectorized) {
+    return [
+      createResolveChapterReferenceTool(bookId),
+      createRagSearchTool(bookId),
+      createRagTocTool(bookId),
+      createRagContextTool(bookId),
+      // Content analysis tools (require chunks from vectorization)
+      createSummarizeTool(bookId),
+      createExtractEntitiesTool(bookId),
+      createAnalyzeArgumentsTool(bookId),
+      createFindQuotesTool(bookId),
+      createCompareSectionsTool(bookId),
+      // Citations are available for indexed chunks and for fallback sources that
+      // can be validated against concrete reader segments.
+      createGetAnnotationsTool(bookId),
+      createAddCitationTool(bookId),
+    ];
+  }
+
+  return [
+    createFallbackResolveChapterReferenceTool(bookId),
+    createFallbackTocTool(bookId),
+    createFallbackSearchTool(bookId),
+    createFallbackChapterContextTool(bookId),
+    createGetAnnotationsTool(bookId),
+    createAddCitationTool(bookId),
+  ];
+}
+
 /** Get available tools based on current state */
 export function getAvailableTools(options: {
   bookId?: string | null;
+  /** Title of the current book, so the model can also address it by name. */
+  bookTitle?: string | null;
   isVectorized: boolean;
   enabledSkills: Skill[];
+  /**
+   * Books the user pinned as conversation context. Their content tools are
+   * registered alongside the current book's, and (when there is more than one
+   * book) every such tool gains a `book` selector parameter.
+   */
+  contextBooks?: ContextBook[];
 }): ToolDefinition[] {
   const tools: ToolDefinition[] = [];
 
   // General tools are always available (no bookId required)
   tools.push(...getGeneralTools());
 
+  // Reading-position tools describe where the user is now → current book only.
   if (options.bookId) {
-    // Context tools (always available when book is loaded)
     tools.push(...getContextTools(options.bookId));
-
-    // RAG tools (require vectorization)
-    if (options.isVectorized) {
-      tools.push(
-        createResolveChapterReferenceTool(options.bookId),
-        createRagSearchTool(options.bookId),
-        createRagTocTool(options.bookId),
-        createRagContextTool(options.bookId),
-      );
-
-      // Content analysis tools (require chunks from vectorization)
-      tools.push(
-        createSummarizeTool(options.bookId),
-        createExtractEntitiesTool(options.bookId),
-        createAnalyzeArgumentsTool(options.bookId),
-        createFindQuotesTool(options.bookId),
-        createCompareSectionsTool(options.bookId),
-      );
-    } else {
-      tools.push(
-        createFallbackResolveChapterReferenceTool(options.bookId),
-        createFallbackTocTool(options.bookId),
-        createFallbackSearchTool(options.bookId),
-        createFallbackChapterContextTool(options.bookId),
-      );
-    }
-
-    // Citations are available for indexed chunks and for fallback sources that
-    // can be validated against concrete reader segments.
-    tools.push(createGetAnnotationsTool(options.bookId), createAddCitationTool(options.bookId));
   }
+
+  const entries: BookToolEntry[] = [];
+  if (options.bookId) {
+    entries.push({
+      book: {
+        id: options.bookId,
+        title: options.bookTitle?.trim() || "current book",
+        isVectorized: options.isVectorized,
+      },
+      tools: getContentTools(options.bookId, options.isVectorized),
+    });
+  }
+  for (const book of dedupeContextBooks(options.contextBooks ?? [])) {
+    if (book.id === options.bookId) continue;
+    entries.push({ book, tools: getContentTools(book.id, book.isVectorized) });
+  }
+  tools.push(...mergeBookScopedTools(entries));
 
   // Add custom skills
   for (const skill of options.enabledSkills) {
