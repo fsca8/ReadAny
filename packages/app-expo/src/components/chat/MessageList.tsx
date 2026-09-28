@@ -60,7 +60,87 @@ export function MessageList({
   const s = makeStyles(colors);
   const flatListRef = useRef<FlatList>(null);
   const isAtBottomRef = useRef(true);
+  /**
+   * Whether the list should keep following the newest message.
+   *
+   * A FlatList lays out incrementally (initialNumToRender + batched rendering) and
+   * the tail cell of a tall last message is measured only once those batches
+   * finish, so a single "scroll to bottom" at mount time lands mid-history —
+   * measured on device: content 5000px → 7676px while the list sat at 6134 of
+   * 6939, i.e. 805px short, with no further event to correct it. Keeping the
+   * follow flag on lets the settle check keep pinning until the bottom holds.
+   *
+   * Cleared only by a real user drag (onScrollBeginDrag); position-based checks
+   * flip mid-layout while the tail is still growing, which is exactly when we must
+   * keep following. Resumed when the user returns to the bottom or taps 滚动到底部.
+   */
+  const autoFollowRef = useRef(true);
   const [showScrollDown, setShowScrollDown] = useState(false);
+
+  /**
+   * Latest scroll metrics reported by the list. Used to compute the exact bottom
+   * offset ourselves (target = content − view) and to know how far we still are.
+   */
+  const metricsRef = useRef({ off: 0, content: 0, layout: 0 });
+
+  // Settle-check bookkeeping (offset when the last pin was issued, and how many
+  // consecutive pins changed nothing).
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const retryCountRef = useRef(0);
+  const lastPinOffRef = useRef(0);
+  const pinToBottomRef = useRef<(source: string) => void>(() => {});
+
+  /**
+   * A pin can land short: the content size we just saw may not have reached the
+   * native scroll view yet, and the tail cell of a tall last message is measured
+   * only once the render batches finish. Telemetry from the failing case: content
+   * grew 5000 → 7676 while the list sat at 6134 of 6939 — 805px short, with no
+   * further event to correct it. So re-check shortly after and pin again until the
+   * bottom holds; stop when a pin changes nothing (a list that simply cannot go
+   * further must not be hammered — the next content-size change restarts the check).
+   */
+  const scheduleSettleCheck = useCallback((source: string, delayMs: number) => {
+    if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    retryTimerRef.current = setTimeout(() => {
+      retryTimerRef.current = null;
+      if (!autoFollowRef.current) return;
+      const m = metricsRef.current;
+      const dist = m.content - m.off - m.layout;
+      if (dist <= BOTTOM_THRESHOLD) return;
+      if (Math.abs(m.off - lastPinOffRef.current) < 2) {
+        retryCountRef.current += 1;
+        if (retryCountRef.current >= 4) return;
+      }
+      pinToBottomRef.current(`retry:${source}`);
+    }, delayMs);
+  }, []);
+
+  /**
+   * Scroll the list to the newest message.
+   *
+   * The offset is computed from the content height the native list reported, NOT
+   * from VirtualizedList's per-cell estimates (`scrollToEnd`): those estimates fall
+   * short with a tall last message and park the list mid-history. A smooth follow
+   * for short distances keeps streaming readable; long jumps (opening a history)
+   * snap instantly instead of visibly scrolling through the whole conversation.
+   */
+  const pinToBottom = useCallback(
+    (source: string) => {
+      const list = flatListRef.current;
+      if (!list) return;
+      const m = metricsRef.current;
+      const target = Math.max(0, m.content - m.layout);
+      const dist = m.content - m.off - m.layout;
+      if (dist <= 8) return; // already parked at the bottom — don't restart an animation
+      lastPinOffRef.current = m.off;
+      retryCountRef.current = 0;
+      const animated = dist <= m.layout;
+      list.scrollToOffset({ offset: target, animated });
+      scheduleSettleCheck(source, animated ? 350 : 130);
+    },
+    [scheduleSettleCheck],
+  );
+  pinToBottomRef.current = pinToBottom;
 
   const lastMsg = messages[messages.length - 1];
 
@@ -68,32 +148,32 @@ export function MessageList({
   useEffect(() => {
     if (isAtBottomRef.current && flatListRef.current && messages.length > 0) {
       setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
+        pinToBottom("effect:newMessages");
       }, 100);
     }
-  }, [messages.length]);
+  }, [messages.length, pinToBottom]);
 
   // Periodic scroll during streaming
   useEffect(() => {
     if (!isStreaming) return;
     const interval = setInterval(() => {
       if (isAtBottomRef.current) {
-        flatListRef.current?.scrollToEnd({ animated: true });
+        pinToBottom("effect:streamTick");
       }
     }, 300);
     return () => clearInterval(interval);
-  }, [isStreaming]);
+  }, [isStreaming, pinToBottom]);
 
   // Force scroll to bottom when streaming ends
   useEffect(() => {
     if (!isStreaming && flatListRef.current && messages.length > 0) {
       setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: false });
         isAtBottomRef.current = true;
         setShowScrollDown(false);
+        pinToBottom("effect:streamEnd");
       }, 200);
     }
-  }, [isStreaming, messages.length]);
+  }, [isStreaming, messages.length, pinToBottom]);
 
   // Listen for keyboard hide events to restore scroll position
   useEffect(() => {
@@ -103,7 +183,7 @@ export function MessageList({
         // When keyboard hides, ensure we scroll to bottom if we were at bottom
         if (isAtBottomRef.current && flatListRef.current && messages.length > 0) {
           setTimeout(() => {
-            flatListRef.current?.scrollToEnd({ animated: false });
+            pinToBottom("effect:keyboardHide");
           }, 100);
         }
       },
@@ -112,20 +192,37 @@ export function MessageList({
     return () => {
       keyboardDidHide.remove();
     };
-  }, [messages.length]);
+  }, [messages.length, pinToBottom]);
 
   const handleScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
     const nearBottom =
       contentSize.height - contentOffset.y - layoutMeasurement.height < BOTTOM_THRESHOLD;
+    metricsRef.current = {
+      off: contentOffset.y,
+      content: contentSize.height,
+      layout: layoutMeasurement.height,
+    };
+    if (nearBottom) autoFollowRef.current = true;
     isAtBottomRef.current = nearBottom;
-    setShowScrollDown(!nearBottom);
+    setShowScrollDown(!nearBottom && !autoFollowRef.current);
   }, []);
 
   const handleScrollToBottom = useCallback(() => {
     isAtBottomRef.current = true;
+    autoFollowRef.current = true;
     setShowScrollDown(false);
-    flatListRef.current?.scrollToEnd({ animated: true });
+    pinToBottom("button");
+  }, [pinToBottom]);
+
+  /** Keep the metrics fresh when a gesture settles (drag or fling). */
+  const trackMetrics = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    metricsRef.current = {
+      off: contentOffset.y,
+      content: contentSize.height,
+      layout: layoutMeasurement.height,
+    };
   }, []);
 
   const [selectModalText, setSelectModalText] = useState<string | null>(null);
@@ -169,7 +266,28 @@ export function MessageList({
         renderItem={renderMessage}
         contentContainerStyle={s.listContent}
         onScroll={handleScroll}
-        onScrollBeginDrag={Keyboard.dismiss}
+        onScrollBeginDrag={() => {
+          // Real user drag = they took over the scroll position; stop following
+          // until they come back to the bottom.
+          autoFollowRef.current = false;
+          Keyboard.dismiss();
+        }}
+        onScrollEndDrag={trackMetrics}
+        onMomentumScrollEnd={trackMetrics}
+        // Pin to the newest message on EVERY content-size change (each batched
+        // render, and each streamed chunk), so a long history lands at the bottom
+        // no matter how many render batches it takes.
+        onContentSizeChange={(_w, h) => {
+          metricsRef.current = { ...metricsRef.current, content: h };
+          if (autoFollowRef.current) pinToBottom("contentSize");
+        }}
+        // The list's own height can change right after mount (input row / keyboard /
+        // tab bar settling); re-pin when that happens, the old offset is then no
+        // longer the bottom.
+        onLayout={(e) => {
+          metricsRef.current = { ...metricsRef.current, layout: e.nativeEvent.layout.height };
+          if (autoFollowRef.current) pinToBottom("listLayout");
+        }}
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
